@@ -22,8 +22,6 @@ import {
   GEMINI_SUMMARIZE_MODEL,
   DEEPSEEK_SUMMARIZE_MODEL,
   KnowledgeCutOffDate,
-  MCP_SYSTEM_TEMPLATE,
-  MCP_TOOLS_TEMPLATE,
   ServiceProvider,
   StoreKey,
   SUMMARIZE_MODEL,
@@ -36,8 +34,7 @@ import { ModelConfig, ModelType, useAppConfig } from "./config";
 import { useAccessStore } from "./access";
 import { collectModelsWithDefaultModel } from "../utils/model";
 import { createEmptyMask, Mask } from "./mask";
-import { executeMcpAction, getAllTools, isMcpEnabled } from "../mcp/actions";
-import { extractMcpJson, isMcpJson } from "../mcp/utils";
+// import { executeMcpAction, getAllTools, isMcpEnabled } from "../mcp/actions"; // 临时注释以支持静态导出
 
 const localStorage = safeLocalStorage();
 
@@ -203,24 +200,22 @@ function fillTemplateWith(input: string, modelConfig: ModelConfig) {
 }
 
 async function getMcpSystemPrompt(): Promise<string> {
-  const tools = await getAllTools();
-
-  let toolsStr = "";
-
-  tools.forEach((i) => {
-    // error client has no tools
-    if (!i.tools) return;
-
-    toolsStr += MCP_TOOLS_TEMPLATE.replace(
-      "{{ clientId }}",
-      i.clientId,
-    ).replace(
-      "{{ tools }}",
-      i.tools.tools.map((p: object) => JSON.stringify(p, null, 2)).join("\n"),
-    );
-  });
-
-  return MCP_SYSTEM_TEMPLATE.replace("{{ MCP_TOOLS }}", toolsStr);
+  // MCP功能临时禁用以支持静态导出
+  // const tools = await getAllTools();
+  // let toolsStr = "";
+  // tools.forEach((i) => {
+  //   // error client has no tools
+  //   if (!i.tools) return;
+  //   toolsStr += MCP_TOOLS_TEMPLATE.replace(
+  //     "{{ clientId }}",
+  //     i.clientId,
+  //   ).replace(
+  //     "{{ tools }}",
+  //     i.tools.tools.map((p: object) => JSON.stringify(p, null, 2)).join("\n"),
+  //   );
+  // });
+  // return MCP_SYSTEM_TEMPLATE.replace("{{ MCP_TOOLS }}", toolsStr);
+  return ""; // 临时返回空字符串
 }
 
 const DEFAULT_CHAT_STATE = {
@@ -555,8 +550,11 @@ export const useChatStore = createPersistStore(
           (session.mask.modelConfig.model.startsWith("gpt-") ||
             session.mask.modelConfig.model.startsWith("chatgpt-"));
 
-        const mcpEnabled = await isMcpEnabled();
-        const mcpSystemPrompt = mcpEnabled ? await getMcpSystemPrompt() : "";
+        // MCP功能临时禁用以支持静态导出
+        // const mcpEnabled = await isMcpEnabled();
+        // const mcpSystemPrompt = mcpEnabled ? await getMcpSystemPrompt() : "";
+        const mcpEnabled = false;
+        const mcpSystemPrompt = "";
 
         var systemPrompts: ChatMessage[] = [];
 
@@ -825,34 +823,35 @@ export const useChatStore = createPersistStore(
 
       /** check if the message contains MCP JSON and execute the MCP action */
       checkMcpJson(message: ChatMessage) {
-        const mcpEnabled = isMcpEnabled();
-        if (!mcpEnabled) return;
-        const content = getMessageTextContent(message);
-        if (isMcpJson(content)) {
-          try {
-            const mcpRequest = extractMcpJson(content);
-            if (mcpRequest) {
-              console.debug("[MCP Request]", mcpRequest);
-
-              executeMcpAction(mcpRequest.clientId, mcpRequest.mcp)
-                .then((result) => {
-                  console.log("[MCP Response]", result);
-                  const mcpResponse =
-                    typeof result === "object"
-                      ? JSON.stringify(result)
-                      : String(result);
-                  get().onUserInput(
-                    `\`\`\`json:mcp-response:${mcpRequest.clientId}\n${mcpResponse}\n\`\`\``,
-                    [],
-                    true,
-                  );
-                })
-                .catch((error) => showToast("MCP execution failed", error));
-            }
-          } catch (error) {
-            console.error("[Check MCP JSON]", error);
-          }
-        }
+        // MCP功能临时禁用以支持静态导出
+        return;
+        // const mcpEnabled = isMcpEnabled();
+        // if (!mcpEnabled) return;
+        // const content = getMessageTextContent(message);
+        // if (isMcpJson(content)) {
+        //   try {
+        //     const mcpRequest = extractMcpJson(content);
+        //     if (mcpRequest) {
+        //       console.debug("[MCP Request]", mcpRequest);
+        //       executeMcpAction(mcpRequest.clientId, mcpRequest.mcp)
+        //         .then((result) => {
+        //           console.log("[MCP Response]", result);
+        //           const mcpResponse =
+        //             typeof result === "object"
+        //               ? JSON.stringify(result)
+        //               : String(result);
+        //           get().onUserInput(
+        //             `\`\`\`json:mcp-response:${mcpRequest.clientId}\n${mcpResponse}\n\`\`\``,
+        //             [],
+        //             true,
+        //           );
+        //         })
+        //         .catch((error) => showToast("MCP execution failed", error));
+        //     }
+        //   } catch (error) {
+        //     console.error("[Check MCP JSON]", error);
+        //   }
+        // }
       },
     };
 

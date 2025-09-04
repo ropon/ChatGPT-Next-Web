@@ -1,4 +1,4 @@
-"use server";
+// "use server"; // 临时注释以支持静态导出
 import {
   createClient,
   executeRequest,

@@ -29,7 +29,7 @@ import { getClientConfig } from "../config/client";
 import { type ClientApi, getClientApi } from "../client/api";
 import { useAccessStore } from "../store";
 import clsx from "clsx";
-import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions";
+// import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions"; // 临时注释以支持静态导出
 
 export function Loading(props: { noLogo?: boolean }) {
   return (
@@ -75,12 +75,13 @@ const Sd = dynamic(async () => (await import("./sd")).Sd, {
   loading: () => <Loading noLogo />,
 });
 
-const McpMarketPage = dynamic(
-  async () => (await import("./mcp-market")).McpMarketPage,
-  {
-    loading: () => <Loading noLogo />,
-  },
-);
+// MCP Market页面临时禁用以支持静态导出
+// const McpMarketPage = dynamic(
+//   async () => (await import("./mcp-market")).McpMarketPage,
+//   {
+//     loading: () => <Loading noLogo />,
+//   },
+// );
 
 export function useSwitchTheme() {
   const config = useAppConfig();
@@ -201,7 +202,8 @@ function Screen() {
             <Route path={Path.SearchChat} element={<SearchChat />} />
             <Route path={Path.Chat} element={<Chat />} />
             <Route path={Path.Settings} element={<Settings />} />
-            <Route path={Path.McpMarket} element={<McpMarketPage />} />
+            {/* MCP Market路由临时禁用以支持静态导出 */}
+            {/* <Route path={Path.McpMarket} element={<McpMarketPage />} /> */}
           </Routes>
         </WindowContent>
       </>
@@ -243,19 +245,20 @@ export function Home() {
     console.log("[Config] got config from build time", getClientConfig());
     useAccessStore.getState().fetch();
 
-    const initMcp = async () => {
-      try {
-        const enabled = await isMcpEnabled();
-        if (enabled) {
-          console.log("[MCP] initializing...");
-          await initializeMcpSystem();
-          console.log("[MCP] initialized");
-        }
-      } catch (err) {
-        console.error("[MCP] failed to initialize:", err);
-      }
-    };
-    initMcp();
+    // MCP initialization temporarily disabled for static export
+    // const initMcp = async () => {
+    //   try {
+    //     const enabled = await isMcpEnabled();
+    //     if (enabled) {
+    //       console.log("[MCP] initializing...");
+    //       await initializeMcpSystem();
+    //       console.log("[MCP] initialized");
+    //     }
+    //   } catch (err) {
+    //     console.error("[MCP] failed to initialize:", err);
+    //   }
+    // };
+    // initMcp();
   }, []);
 
   if (!useHasHydrated()) {

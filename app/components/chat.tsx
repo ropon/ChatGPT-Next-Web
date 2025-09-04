@@ -124,7 +124,7 @@ import { isEmpty } from "lodash-es";
 import { getModelProvider } from "../utils/model";
 import { RealtimeChat } from "@/app/components/realtime-chat";
 import clsx from "clsx";
-import { getAvailableClientsCount, isMcpEnabled } from "../mcp/actions";
+// import { getAvailableClientsCount, isMcpEnabled } from "../mcp/actions"; // 临时注释以支持静态导出
 
 const localStorage = safeLocalStorage();
 
@@ -140,15 +140,17 @@ const MCPAction = () => {
   const [mcpEnabled, setMcpEnabled] = useState(false);
 
   useEffect(() => {
-    const checkMcpStatus = async () => {
-      const enabled = await isMcpEnabled();
-      setMcpEnabled(enabled);
-      if (enabled) {
-        const count = await getAvailableClientsCount();
-        setCount(count);
-      }
-    };
-    checkMcpStatus();
+    // MCP功能临时禁用以支持静态导出
+    // const checkMcpStatus = async () => {
+    //   const enabled = await isMcpEnabled();
+    //   setMcpEnabled(enabled);
+    //   if (enabled) {
+    //     const count = await getAvailableClientsCount();
+    //     setCount(count);
+    //   }
+    // };
+    // checkMcpStatus();
+    setMcpEnabled(false); // 临时设置为false
   }, []);
 
   if (!mcpEnabled) return null;

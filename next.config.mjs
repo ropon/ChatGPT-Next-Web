@@ -1,4 +1,9 @@
 import webpack from "webpack";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const mode = process.env.BUILD_MODE ?? "standalone";
 console.log("[Next] build mode", mode);
@@ -17,6 +22,17 @@ const nextConfig = {
     if (disableChunk) {
       config.plugins.push(
         new webpack.optimize.LimitChunkCountPlugin({ maxChunks: 1 }),
+      );
+    }
+
+    // 在静态导出模式下替换 server-actions.ts 为 stub 文件
+    // 因为 Server Actions 不支持静态导出
+    if (mode === "export") {
+      config.plugins.push(
+        new webpack.NormalModuleReplacementPlugin(
+          /app\/mcp\/server-actions\.ts$/,
+          path.resolve(__dirname, "./app/mcp/server-actions.stub.ts"),
+        ),
       );
     }
 

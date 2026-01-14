@@ -1,8 +1,9 @@
-import {
   getMessageTextContent,
   isDalle3,
   safeLocalStorage,
   trimTopic,
+  isMcpJson,
+  extractMcpJson,
 } from "../utils";
 
 import { indexedDBStorage } from "@/app/utils/indexedDB-storage";
@@ -34,7 +35,7 @@ import { ModelConfig, ModelType, useAppConfig } from "./config";
 import { useAccessStore } from "./access";
 import { collectModelsWithDefaultModel } from "../utils/model";
 import { createEmptyMask, Mask } from "./mask";
-// import { executeMcpAction, getAllTools, isMcpEnabled } from "../mcp/actions"; // 临时注释以支持静态导出
+import { executeMcpAction, getAllTools, isMcpEnabled } from "../mcp/actions";
 
 const localStorage = safeLocalStorage();
 
@@ -550,11 +551,8 @@ export const useChatStore = createPersistStore(
           (session.mask.modelConfig.model.startsWith("gpt-") ||
             session.mask.modelConfig.model.startsWith("chatgpt-"));
 
-        // MCP功能临时禁用以支持静态导出
-        // const mcpEnabled = await isMcpEnabled();
-        // const mcpSystemPrompt = mcpEnabled ? await getMcpSystemPrompt() : "";
-        const mcpEnabled = false;
-        const mcpSystemPrompt = "";
+        const mcpEnabled = await isMcpEnabled();
+        const mcpSystemPrompt = mcpEnabled ? await getMcpSystemPrompt() : "";
 
         var systemPrompts: ChatMessage[] = [];
 
@@ -823,35 +821,38 @@ export const useChatStore = createPersistStore(
 
       /** check if the message contains MCP JSON and execute the MCP action */
       checkMcpJson(message: ChatMessage) {
-        // MCP功能临时禁用以支持静态导出
-        return;
-        // const mcpEnabled = isMcpEnabled();
-        // if (!mcpEnabled) return;
-        // const content = getMessageTextContent(message);
-        // if (isMcpJson(content)) {
-        //   try {
-        //     const mcpRequest = extractMcpJson(content);
-        //     if (mcpRequest) {
-        //       console.debug("[MCP Request]", mcpRequest);
-        //       executeMcpAction(mcpRequest.clientId, mcpRequest.mcp)
-        //         .then((result) => {
-        //           console.log("[MCP Response]", result);
-        //           const mcpResponse =
-        //             typeof result === "object"
-        //               ? JSON.stringify(result)
-        //               : String(result);
-        //           get().onUserInput(
-        //             `\`\`\`json:mcp-response:${mcpRequest.clientId}\n${mcpResponse}\n\`\`\``,
-        //             [],
-        //             true,
-        //           );
-        //         })
-        //         .catch((error) => showToast("MCP execution failed", error));
-        //     }
-        //   } catch (error) {
-        //     console.error("[Check MCP JSON]", error);
-        //   }
-        // }
+        // Since isMcpEnabled is async in our new implementation (potentially), we might need to handle promise.
+        // But for checkMcpJson which is called synchronously or in flow, it's tricky.
+        // However, isMcpEnabled in actions.ts wraps async calls for Tauri.
+        // Converting this function to async is safer.
+        isMcpEnabled().then(enabled => {
+             if (!enabled) return;
+             const content = getMessageTextContent(message);
+             if (isMcpJson(content)) {
+               try {
+                 const mcpRequest = extractMcpJson(content);
+                 if (mcpRequest) {
+                   console.debug("[MCP Request]", mcpRequest);
+                   executeMcpAction(mcpRequest.clientId, mcpRequest.mcp)
+                     .then((result) => {
+                       console.log("[MCP Response]", result);
+                       const mcpResponse =
+                         typeof result === "object"
+                           ? JSON.stringify(result)
+                           : String(result);
+                       get().onUserInput(
+                         `\`\`\`json:mcp-response:${mcpRequest.clientId}\n${mcpResponse}\n\`\`\``,
+                         [],
+                         true,
+                       );
+                     })
+                     .catch((error) => showToast("MCP execution failed", error));
+                 }
+               } catch (error) {
+                 console.error("[Check MCP JSON]", error);
+               }
+             }
+        });
       },
     };
 

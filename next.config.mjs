@@ -30,7 +30,7 @@ const nextConfig = {
     if (mode === "export") {
       config.plugins.push(
         new webpack.NormalModuleReplacementPlugin(
-          /app\/mcp\/server-actions\.ts$/,
+          /server-actions$/,
           path.resolve(__dirname, "./app/mcp/server-actions.stub.ts"),
         ),
       );

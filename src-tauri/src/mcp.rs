@@ -70,7 +70,7 @@ pub async fn mcp_connect(
     let stdout = child.stdout.take().ok_or("Failed to open stdout")?;
 
     let (tx, mut rx) = mpsc::channel::<String>(32);
-    let pending_requests = Arc::new(Mutex::new(HashMap::new()));
+    let pending_requests: Arc<Mutex<HashMap<String, oneshot::Sender<McpResponse>>>> = Arc::new(Mutex::new(HashMap::new()));
     let pending_requests_clone = pending_requests.clone();
 
     // Stdin writer task
@@ -123,8 +123,12 @@ pub async fn mcp_send_request(
     id: String,
     request: McpRequest,
 ) -> Result<McpResponse, String> {
-    let servers = state.servers.lock().unwrap();
-    let server = servers.get(&id).ok_or("Server not found")?;
+    // 在 await 之前提取所需数据，避免 MutexGuard 跨越 await 点
+    let (request_tx, pending_requests) = {
+        let servers = state.servers.lock().unwrap();
+        let server = servers.get(&id).ok_or("Server not found")?;
+        (server.request_tx.clone(), server.pending_requests.clone())
+    }; // MutexGuard 在此处被释放
 
     let req_id = match &request.id {
         Some(Value::String(s)) => s.clone(),
@@ -134,11 +138,11 @@ pub async fn mcp_send_request(
 
     let (resp_tx, resp_rx) = oneshot::channel();
     
-    server.pending_requests.lock().unwrap().insert(req_id, resp_tx);
+    pending_requests.lock().unwrap().insert(req_id, resp_tx);
 
     let req_str = serde_json::to_string(&request).map_err(|e| e.to_string())?;
     
-    server.request_tx.send(req_str).await.map_err(|e| e.to_string())?;
+    request_tx.send(req_str).await.map_err(|e| e.to_string())?;
 
     let response = resp_rx.await.map_err(|_| "Request timed out or channel closed".to_string())?;
     

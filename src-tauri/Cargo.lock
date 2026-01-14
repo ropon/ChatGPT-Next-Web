@@ -1988,6 +1988,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-util",
+ "log",
  "percent-encoding",
  "reqwest",
  "serde",
@@ -1995,6 +1996,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-window-state",
+ "tokio",
 ]
 
 [[package]]
@@ -3479,8 +3481,8 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-window-state"
-version = "0.1.0"
-source = "git+https://github.com/tauri-apps/plugins-workspace?branch=v1#7b9d7a1d8896c213998949a423d5835e8e2734c6"
+version = "0.1.1"
+source = "git+https://github.com/tauri-apps/plugins-workspace?branch=v1#4d98fef66b11e1104cda2f2b7c443add317d2b0a"
 dependencies = [
  "bincode",
  "bitflags 2.3.2",
@@ -3692,9 +3694,23 @@ dependencies = [
  "libc",
  "mio",
  "num_cpus",
+ "parking_lot",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "630bdcf245f78637c13ec01ffae6187cca34625e8c63150d424b59e55af2675e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.16",
 ]
 
 [[package]]

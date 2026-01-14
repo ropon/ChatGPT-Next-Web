@@ -31,7 +31,7 @@ import { isIOS, useMobileScreen } from "../utils";
 import dynamic from "next/dynamic";
 import { Selector, showConfirm } from "./ui-lib";
 import clsx from "clsx";
-// import { isMcpEnabled } from "../mcp/actions"; // 临时注释以支持静态导出
+import { isMcpEnabled } from "../mcp/actions";
 
 const DISCOVERY = [
   { name: Locale.Plugin.Name, path: Path.Plugins },
@@ -234,14 +234,13 @@ export function SideBar(props: { className?: string }) {
   const [mcpEnabled, setMcpEnabled] = useState(false);
 
   useEffect(() => {
-    // MCP检查临时禁用以支持静态导出
-    // const checkMcpStatus = async () => {
-    //   const enabled = await isMcpEnabled();
-    //   setMcpEnabled(enabled);
-    //   console.log("[SideBar] MCP enabled:", enabled);
-    // };
-    // checkMcpStatus();
-    setMcpEnabled(false); // 临时设置为false
+    // 检查 MCP 功能是否可用
+    const checkMcpStatus = async () => {
+      const enabled = await isMcpEnabled();
+      setMcpEnabled(enabled);
+      console.log("[SideBar] MCP 状态:", enabled);
+    };
+    checkMcpStatus();
   }, []);
 
   return (

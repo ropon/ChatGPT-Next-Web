@@ -52,5 +52,27 @@ custom-protocol = ["tauri/custom-protocol"]
 version = "1.28"
 features = ["full"]
 
+[dependencies.tokio-util]
+version = "0.7"
+features = ["codec", "io"]
+
 [dependencies.log]
 version = "0.4"
+
+# MCP SDK 及相关依赖
+[dependencies.rmcp]
+git = "https://github.com/modelcontextprotocol/rust-sdk"
+features = ["client", "transport-child-process"]
+
+[dependencies.anyhow]
+version = "1.0"
+
+[dependencies.tracing]
+version = "0.1"
+
+[dependencies.tracing-subscriber]
+version = "0.3"
+features = ["env-filter"]
+
+[dependencies.dirs]
+version = "5.0"

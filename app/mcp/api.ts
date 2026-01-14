@@ -1,170 +1,295 @@
+// MCP API - Tauri 原生实现
+// 使用 rmcp (Rust MCP SDK) 作为后端
 
-import { 
-  McpConfigData, 
-  ServerConfig, 
+import {
+  McpConfigData,
+  ServerConfig,
   ServerStatusResponse,
   ListToolsResponse,
   DEFAULT_MCP_CONFIG,
-  McpRequestMessage
+  McpRequestMessage,
+  RuntimeConfig,
+  DEFAULT_RUNTIME_CONFIG,
 } from "./types";
-import { invoke } from "@tauri-apps/api/core";
-// If core is not available, try @tauri-apps/api (auto-detect not easy, assume v2 based on package.json)
-// Fallback type check or just use 'any' if types are missing for now.
+// Tauri v1 使用 @tauri-apps/api/tauri
+import { invoke } from "@tauri-apps/api/tauri";
 
-// Interface defining all MCP operations
+// 定义 MCP API 接口
 export interface McpApi {
-  init(): Promise<void>;
+  init(): Promise<McpConfigData>;
   getConfig(): Promise<McpConfigData>;
+  getConfigPath(): Promise<string>;
   addServer(id: string, config: ServerConfig): Promise<McpConfigData>;
   removeServer(id: string): Promise<McpConfigData>;
   pauseServer(id: string): Promise<McpConfigData>;
-  resumeServer(id: string): Promise<void>;
+  resumeServer(id: string): Promise<McpConfigData>;
   restartAll(): Promise<McpConfigData>;
   getStatuses(): Promise<Record<string, ServerStatusResponse>>;
   getTools(id: string): Promise<ListToolsResponse | null>;
-  callTool(serverId: string, request: McpRequestMessage): Promise<any>;
+  getAllTools(): Promise<Array<{ clientId: string; tools: ListToolsResponse }>>;
+  callTool(
+    serverId: string,
+    toolName: string,
+    args?: Record<string, unknown>,
+  ): Promise<any>;
   isEnabled(): Promise<boolean>;
+  importConfig(configContent: string): Promise<McpConfigData>;
+  exportConfig(): Promise<string>;
+  getRuntime(): Promise<RuntimeConfig>;
+  setRuntime(runtime: RuntimeConfig): Promise<RuntimeConfig>;
+  detectPaths(): Promise<RuntimeConfig>;
 }
 
-// Local Storage Key for Tauri App
-const STORAGE_KEY = "mcp_config";
-
-// Implementation for Tauri App
+/**
+ * Tauri 原生 MCP API 实现
+ * 使用 Rust rmcp SDK 作为后端
+ */
 export class TauriMcpApi implements McpApi {
-  private config: McpConfigData = DEFAULT_MCP_CONFIG;
-  private statuses: Record<string, ServerStatusResponse> = {};
+  private initialized = false;
 
-  async init(): Promise<void> {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try {
-        this.config = JSON.parse(saved);
-      } catch (e) {
-        console.error("Failed to parse MCP config", e);
-      }
-    }
-    
-    // Auto-connect active servers
-    for (const [id, server] of Object.entries(this.config.mcpServers)) {
-      if (server.status === "active") {
-        await this.connect(id, server);
-      } else {
-        this.statuses[id] = { status: server.status || "paused", errorMsg: null };
-      }
-    }
-  }
-
-  private async saveConfig() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(this.config));
-  }
-
-  private async connect(id: string, config: ServerConfig) {
-    this.statuses[id] = { status: "initializing", errorMsg: null };
+  /**
+   * 初始化 MCP 系统
+   * 加载配置文件并自动连接活跃的服务器
+   */
+  async init(): Promise<McpConfigData> {
     try {
-      await invoke("mcp_connect", { id, config });
-      this.statuses[id] = { status: "active", errorMsg: null };
+      const config = await invoke<McpConfigData>("mcp_init");
+      this.initialized = true;
+      console.log("[MCP] 初始化完成", config);
+      return config;
     } catch (e) {
-      this.statuses[id] = { status: "error", errorMsg: String(e) };
-      console.error(`Failed to connect to ${id}`, e);
+      console.error("[MCP] 初始化失败", e);
+      return DEFAULT_MCP_CONFIG;
     }
   }
 
+  /**
+   * 获取当前配置
+   */
   async getConfig(): Promise<McpConfigData> {
-    return this.config;
+    try {
+      return await invoke<McpConfigData>("mcp_get_config");
+    } catch (e) {
+      console.error("[MCP] 获取配置失败", e);
+      return DEFAULT_MCP_CONFIG;
+    }
   }
 
+  /**
+   * 获取配置文件路径
+   */
+  async getConfigPath(): Promise<string> {
+    try {
+      return await invoke<string>("mcp_get_config_path");
+    } catch (e) {
+      console.error("[MCP] 获取配置路径失败", e);
+      return "";
+    }
+  }
+
+  /**
+   * 添加或更新服务器
+   */
   async addServer(id: string, config: ServerConfig): Promise<McpConfigData> {
-    this.config.mcpServers[id] = { ...config, status: "active" };
-    await this.saveConfig();
-    await this.connect(id, config);
-    return this.config;
+    try {
+      return await invoke<McpConfigData>("mcp_add_server", { id, config });
+    } catch (e) {
+      console.error("[MCP] 添加服务器失败", e);
+      throw e;
+    }
   }
 
+  /**
+   * 移除服务器
+   */
   async removeServer(id: string): Promise<McpConfigData> {
-    delete this.config.mcpServers[id];
-    await this.saveConfig();
-    await invoke("mcp_disconnect", { id }).catch(console.error);
-    delete this.statuses[id];
-    return this.config;
+    try {
+      return await invoke<McpConfigData>("mcp_remove_server", { id });
+    } catch (e) {
+      console.error("[MCP] 移除服务器失败", e);
+      throw e;
+    }
   }
 
+  /**
+   * 暂停服务器
+   */
   async pauseServer(id: string): Promise<McpConfigData> {
-    const server = this.config.mcpServers[id];
-    if (server) {
-      server.status = "paused";
-      await this.saveConfig();
-      await invoke("mcp_disconnect", { id }).catch(console.error);
-      this.statuses[id] = { status: "paused", errorMsg: null };
-    }
-    return this.config;
-  }
-
-  async resumeServer(id: string): Promise<void> {
-    const server = this.config.mcpServers[id];
-    if (server) {
-      server.status = "active";
-      await this.saveConfig();
-      await this.connect(id, server);
+    try {
+      return await invoke<McpConfigData>("mcp_pause_server", { id });
+    } catch (e) {
+      console.error("[MCP] 暂停服务器失败", e);
+      throw e;
     }
   }
 
+  /**
+   * 恢复服务器
+   */
+  async resumeServer(id: string): Promise<McpConfigData> {
+    try {
+      return await invoke<McpConfigData>("mcp_resume_server", { id });
+    } catch (e) {
+      console.error("[MCP] 恢复服务器失败", e);
+      throw e;
+    }
+  }
+
+  /**
+   * 重启所有服务器
+   */
   async restartAll(): Promise<McpConfigData> {
-    // Disconnect all first
-    for (const id of Object.keys(this.statuses)) {
-        await invoke("mcp_disconnect", { id }).catch(() => {});
+    try {
+      return await invoke<McpConfigData>("mcp_restart_all");
+    } catch (e) {
+      console.error("[MCP] 重启所有服务器失败", e);
+      throw e;
     }
-    await this.init();
-    return this.config;
   }
 
+  /**
+   * 获取所有服务器状态
+   */
   async getStatuses(): Promise<Record<string, ServerStatusResponse>> {
-    return this.statuses;
-  }
-
-  async getAllTools(): Promise<Array<{ clientId: string; tools: ListToolsResponse['tools'] }>> {
-    const result = [];
-    for (const [id, status] of Object.entries(this.statuses)) {
-        if (status.status === 'active') {
-            const toolsResp = await this.getTools(id);
-            if (toolsResp && toolsResp.tools) {
-                result.push({
-                    clientId: id,
-                    tools: toolsResp.tools
-                });
-            }
-        }
+    try {
+      return await invoke<Record<string, ServerStatusResponse>>(
+        "mcp_get_statuses",
+      );
+    } catch (e) {
+      console.error("[MCP] 获取状态失败", e);
+      return {};
     }
-    return result;
   }
 
+  /**
+   * 获取服务器的工具列表
+   */
   async getTools(id: string): Promise<ListToolsResponse | null> {
     try {
-      const response = await invoke<any>("mcp_send_request", {
-        id,
-        request: {
-          jsonrpc: "2.0",
-          method: "tools/list",
-          id: 1 // arbitrary ID for waiting
-        }
-      });
-      if (response.result) {
-        return response.result as ListToolsResponse;
-      }
+      return await invoke<ListToolsResponse>("mcp_get_tools", { id });
     } catch (e) {
-      console.error("Failed to list tools", e);
+      console.error("[MCP] 获取工具列表失败", e);
+      return null;
     }
-    return null;
   }
 
-  async callTool(serverId: string, request: McpRequestMessage): Promise<any> {
-      const response = await invoke<any>("mcp_send_request", {
+  /**
+   * 获取所有活跃服务器的工具列表
+   */
+  async getAllTools(): Promise<
+    Array<{ clientId: string; tools: ListToolsResponse }>
+  > {
+    try {
+      const result =
+        await invoke<Array<[string, ListToolsResponse]>>("mcp_get_all_tools");
+      return result.map(([clientId, tools]) => ({ clientId, tools }));
+    } catch (e) {
+      console.error("[MCP] 获取所有工具失败", e);
+      return [];
+    }
+  }
+
+  /**
+   * 调用工具
+   */
+  async callTool(
+    serverId: string,
+    toolName: string,
+    args?: Record<string, unknown>,
+  ): Promise<any> {
+    try {
+      const response = await invoke<{ result?: any; error?: string }>(
+        "mcp_call_tool",
+        {
           id: serverId,
-          request
-      });
-      return response;
+          toolName,
+          arguments: args,
+        },
+      );
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      return response.result;
+    } catch (e) {
+      console.error("[MCP] 调用工具失败", e);
+      throw e;
+    }
   }
 
+  /**
+   * 检查 MCP 是否可用
+   */
   async isEnabled(): Promise<boolean> {
-      return true;
+    try {
+      return await invoke<boolean>("mcp_is_enabled");
+    } catch (e) {
+      console.error("[MCP] 检查可用性失败", e);
+      return false;
+    }
+  }
+
+  /**
+   * 导入配置
+   */
+  async importConfig(configContent: string): Promise<McpConfigData> {
+    try {
+      return await invoke<McpConfigData>("mcp_import_config", {
+        configContent,
+      });
+    } catch (e) {
+      console.error("[MCP] 导入配置失败", e);
+      throw e;
+    }
+  }
+
+  /**
+   * 导出配置
+   */
+  async exportConfig(): Promise<string> {
+    try {
+      return await invoke<string>("mcp_export_config");
+    } catch (e) {
+      console.error("[MCP] 导出配置失败", e);
+      throw e;
+    }
+  }
+
+  /**
+   * 获取运行时配置
+   */
+  async getRuntime(): Promise<RuntimeConfig> {
+    try {
+      return await invoke<RuntimeConfig>("mcp_get_runtime");
+    } catch (e) {
+      console.error("[MCP] 获取运行时配置失败", e);
+      return DEFAULT_RUNTIME_CONFIG;
+    }
+  }
+
+  /**
+   * 设置运行时配置
+   */
+  async setRuntime(runtime: RuntimeConfig): Promise<RuntimeConfig> {
+    try {
+      return await invoke<RuntimeConfig>("mcp_set_runtime", { runtime });
+    } catch (e) {
+      console.error("[MCP] 设置运行时配置失败", e);
+      throw e;
+    }
+  }
+
+  /**
+   * 自动检测可执行文件路径
+   */
+  async detectPaths(): Promise<RuntimeConfig> {
+    try {
+      return await invoke<RuntimeConfig>("mcp_detect_paths");
+    } catch (e) {
+      console.error("[MCP] 检测路径失败", e);
+      return DEFAULT_RUNTIME_CONFIG;
+    }
   }
 }
+
+// 导出单例实例，供 Tauri 应用使用
+export const tauriMcpApi = new TauriMcpApi();

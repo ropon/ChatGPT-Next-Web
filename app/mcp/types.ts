@@ -64,13 +64,15 @@ export const McpNotificationsSchema: z.ZodType<McpNotifications> = z.object({
 ////////////
 // Next Chat
 ////////////
+export interface ToolInfo {
+  name: string;
+  description?: string;
+  inputSchema?: object;
+  [key: string]: any;
+}
+
 export interface ListToolsResponse {
-  tools: {
-    name?: string;
-    description?: string;
-    inputSchema?: object;
-    [key: string]: any;
-  };
+  tools: ToolInfo[];
 }
 
 export type McpClientData =
@@ -122,8 +124,23 @@ export interface McpConfigData {
   mcpServers: Record<string, ServerConfig>;
 }
 
+// 运行时环境配置
+export interface RuntimeConfig {
+  nodePath?: string;
+  npxPath?: string;
+  uvxPath?: string;
+  extraPath?: string;
+}
+
 export const DEFAULT_MCP_CONFIG: McpConfigData = {
   mcpServers: {},
+};
+
+export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
+  nodePath: undefined,
+  npxPath: undefined,
+  uvxPath: undefined,
+  extraPath: undefined,
 };
 
 export interface ArgsMapping {

@@ -23,6 +23,8 @@ import {
   GEMINI_SUMMARIZE_MODEL,
   DEEPSEEK_SUMMARIZE_MODEL,
   KnowledgeCutOffDate,
+  MCP_SYSTEM_TEMPLATE,
+  MCP_TOOLS_TEMPLATE,
   ServiceProvider,
   StoreKey,
   SUMMARIZE_MODEL,
@@ -35,7 +37,7 @@ import { ModelConfig, ModelType, useAppConfig } from "./config";
 import { useAccessStore } from "./access";
 import { collectModelsWithDefaultModel } from "../utils/model";
 import { createEmptyMask, Mask } from "./mask";
-import { executeMcpAction, isMcpEnabled } from "../mcp/actions";
+import { executeMcpAction, getAllTools, isMcpEnabled } from "../mcp/actions";
 
 const localStorage = safeLocalStorage();
 
@@ -201,22 +203,23 @@ function fillTemplateWith(input: string, modelConfig: ModelConfig) {
 }
 
 async function getMcpSystemPrompt(): Promise<string> {
-  // MCP功能临时禁用以支持静态导出
-  // const tools = await getAllTools();
-  // let toolsStr = "";
-  // tools.forEach((i) => {
-  //   // error client has no tools
-  //   if (!i.tools) return;
-  //   toolsStr += MCP_TOOLS_TEMPLATE.replace(
-  //     "{{ clientId }}",
-  //     i.clientId,
-  //   ).replace(
-  //     "{{ tools }}",
-  //     i.tools.tools.map((p: object) => JSON.stringify(p, null, 2)).join("\n"),
-  //   );
-  // });
-  // return MCP_SYSTEM_TEMPLATE.replace("{{ MCP_TOOLS }}", toolsStr);
-  return ""; // 临时返回空字符串
+  try {
+    const tools = await getAllTools();
+    if (!tools || tools.length === 0) {
+      return "";
+    }
+    let toolsStr = "";
+    tools.forEach((i) => {
+      toolsStr += MCP_TOOLS_TEMPLATE.replace(
+        "{{ clientId }}",
+        i.clientId,
+      ).replace("{{ tools }}", JSON.stringify(i, null, 2));
+    });
+    return MCP_SYSTEM_TEMPLATE.replace("{{ MCP_TOOLS }}", toolsStr);
+  } catch (error) {
+    console.error("[MCP] Failed to get system prompt:", error);
+    return "";
+  }
 }
 
 const DEFAULT_CHAT_STATE = {

@@ -16,15 +16,145 @@ use tauri::State;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
-/// MCP 服务器配置
+// SSE 传输模块
+mod sse_transport;
+use sse_transport::LegacySseClientWrapper;
+
+/// MCP 服务器配置 - Stdio 类型
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ServerConfig {
+pub struct StdioServerConfig {
+    #[serde(rename = "type", default)]
+    pub config_type: Option<String>,
     pub command: String,
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
     #[serde(default = "default_status")]
     pub status: String,
+}
+
+/// MCP 服务器配置 - SSE 类型
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SSEServerConfig {
+    #[serde(rename = "type")]
+    pub config_type: String,
+    pub url: String,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    #[serde(default = "default_status")]
+    pub status: String,
+}
+
+/// MCP 服务器配置 - HTTP 类型（Streamable HTTP）
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HTTPServerConfig {
+    #[serde(rename = "type")]
+    pub config_type: String,
+    pub url: String,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    #[serde(default = "default_status")]
+    pub status: String,
+}
+
+/// MCP 服务器配置（支持 Stdio、SSE 和 HTTP 三种类型）
+#[derive(Debug, Clone)]
+pub enum ServerConfig {
+    SSE(SSEServerConfig),
+    HTTP(HTTPServerConfig),
+    Stdio(StdioServerConfig),
+}
+
+// 自定义反序列化，根据 type 字段区分 SSE 和 HTTP
+impl<'de> Deserialize<'de> for ServerConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        
+        // 检查是否有 type 字段
+        if let Some(config_type) = value.get("type").and_then(|v| v.as_str()) {
+            match config_type {
+                "sse" => {
+                    let config: SSEServerConfig = serde_json::from_value(value)
+                        .map_err(serde::de::Error::custom)?;
+                    Ok(ServerConfig::SSE(config))
+                }
+                "http" => {
+                    let config: HTTPServerConfig = serde_json::from_value(value)
+                        .map_err(serde::de::Error::custom)?;
+                    Ok(ServerConfig::HTTP(config))
+                }
+                "stdio" => {
+                    let config: StdioServerConfig = serde_json::from_value(value)
+                        .map_err(serde::de::Error::custom)?;
+                    Ok(ServerConfig::Stdio(config))
+                }
+                _ => {
+                    // 未知类型，尝试作为 Stdio 解析（向后兼容）
+                    let config: StdioServerConfig = serde_json::from_value(value)
+                        .map_err(serde::de::Error::custom)?;
+                    Ok(ServerConfig::Stdio(config))
+                }
+            }
+        } else {
+            // 没有 type 字段，尝试作为 Stdio 解析（向后兼容旧配置）
+            let config: StdioServerConfig = serde_json::from_value(value)
+                .map_err(serde::de::Error::custom)?;
+            Ok(ServerConfig::Stdio(config))
+        }
+    }
+}
+
+// 自定义序列化
+impl Serialize for ServerConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            ServerConfig::SSE(config) => config.serialize(serializer),
+            ServerConfig::HTTP(config) => config.serialize(serializer),
+            ServerConfig::Stdio(config) => config.serialize(serializer),
+        }
+    }
+}
+
+impl ServerConfig {
+    pub fn get_status(&self) -> &str {
+        match self {
+            ServerConfig::Stdio(c) => &c.status,
+            ServerConfig::SSE(c) => &c.status,
+            ServerConfig::HTTP(c) => &c.status,
+        }
+    }
+
+    pub fn set_status(&mut self, status: String) {
+        match self {
+            ServerConfig::Stdio(c) => c.status = status,
+            ServerConfig::SSE(c) => c.status = status,
+            ServerConfig::HTTP(c) => c.status = status,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn is_sse(&self) -> bool {
+        match self {
+            ServerConfig::SSE(_) => true,
+            ServerConfig::Stdio(c) => c.config_type.as_deref() == Some("sse"),
+            ServerConfig::HTTP(_) => false,
+        }
+    }
+    
+    #[allow(dead_code)]
+    pub fn is_http(&self) -> bool {
+        match self {
+            ServerConfig::HTTP(_) => true,
+            ServerConfig::Stdio(c) => c.config_type.as_deref() == Some("http"),
+            _ => false,
+        }
+    }
 }
 
 fn default_status() -> String {
@@ -97,6 +227,7 @@ pub struct ListToolsResponse {
 
 /// 工具调用请求
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct McpToolRequest {
     pub method: String,
     pub params: Option<Value>,
@@ -112,9 +243,32 @@ pub struct McpToolResponse {
 }
 
 /// 活跃的 MCP 客户端连接
-struct ActiveClient {
-    service: RunningService<RoleClient, ()>,
-    tools: Vec<Tool>,
+enum ActiveClient {
+    /// Stdio 客户端（使用 rmcp RunningService）
+    Stdio {
+        service: RunningService<RoleClient, ()>,
+        tools: Vec<Tool>,
+    },
+    /// SSE 客户端（使用自定义传统 SSE 实现）
+    Sse {
+        client: LegacySseClientWrapper,
+        tools: Vec<Tool>,
+    },
+    /// HTTP 客户端（Streamable HTTP）
+    Http {
+        client: LegacySseClientWrapper,
+        tools: Vec<Tool>,
+    },
+}
+
+impl ActiveClient {
+    fn tools(&self) -> &Vec<Tool> {
+        match self {
+            ActiveClient::Stdio { tools, .. } => tools,
+            ActiveClient::Sse { tools, .. } => tools,
+            ActiveClient::Http { tools, .. } => tools,
+        }
+    }
 }
 
 /// MCP 管理器
@@ -172,14 +326,14 @@ pub async fn mcp_init(state: State<'_, McpManager>) -> Result<McpConfigData, Str
 
     // 自动连接状态为 active 的服务器
     for (id, server_config) in &config.mcp_servers {
-        if server_config.status == "active" {
+        if server_config.get_status() == "active" {
             let _ = connect_to_server_with_runtime(&state, id.clone(), server_config.clone(), &config.runtime).await;
         } else {
             let mut statuses = state.statuses.write().await;
             statuses.insert(
                 id.clone(),
                 ServerStatus {
-                    status: server_config.status.clone(),
+                    status: server_config.get_status().to_string(),
                     error_msg: None,
                 },
             );
@@ -286,59 +440,39 @@ async fn connect_to_server_with_runtime(
         );
     }
 
-    // 构建命令 - 查找可执行文件的完整路径
-    let command = find_executable(&config.command, runtime);
-    let args = config.args.clone();
-    let env = config.env.clone();
-    let runtime_clone = runtime.clone();
-
-    tracing::info!("连接 MCP 服务器 [{}]: {} {:?}", id, command, args);
-
-    // 使用 rmcp SDK 连接
-    let result = async {
-        let mut cmd = Command::new(&command);
-        
-        // 设置扩展的 PATH 环境变量
-        let extended_path = get_extended_path(&runtime_clone);
-        cmd.env("PATH", extended_path);
-        
-        // 设置 HOME 环境变量（某些工具需要）
-        if let Ok(home) = std::env::var("HOME") {
-            cmd.env("HOME", home);
-        }
-        
-        // 设置 USER 环境变量
-        if let Ok(user) = std::env::var("USER") {
-            cmd.env("USER", user);
-        }
-        
-        // 添加用户自定义环境变量
-        for (key, value) in env {
-            cmd.env(key, value);
-        }
-
-        let transport = TokioChildProcess::new(cmd.configure(|c| {
-            for arg in &args {
-                c.arg(arg);
+    let result: Result<ActiveClient, anyhow::Error> = match &config {
+        ServerConfig::SSE(sse_config) => {
+            // SSE 传输（传统 SSE，需要 endpoint 事件）
+            tracing::info!("连接 MCP 服务器 [{}] (SSE): {}", id, sse_config.url);
+            match connect_sse_server(&id, sse_config).await {
+                Ok((client, tools)) => Ok(ActiveClient::Sse { client, tools }),
+                Err(e) => Err(e),
             }
-        }))
-        .map_err(|e| anyhow!("创建传输失败: {}", e))?;
-
-        let service = ().serve(transport).await.map_err(|e| anyhow!("连接服务器失败: {}", e))?;
-
-        // 获取工具列表
-        let tools_result = service.list_tools(Default::default()).await.map_err(|e| anyhow!("获取工具列表失败: {}", e))?;
-
-        Ok::<(RunningService<RoleClient, ()>, Vec<Tool>), anyhow::Error>((service, tools_result.tools))
-    }
-    .await;
+        }
+        ServerConfig::HTTP(http_config) => {
+            // HTTP 传输（Streamable HTTP，直接 POST）
+            tracing::info!("连接 MCP 服务器 [{}] (HTTP): {}", id, http_config.url);
+            match connect_http_server(&id, http_config).await {
+                Ok((client, tools)) => Ok(ActiveClient::Http { client, tools }),
+                Err(e) => Err(e),
+            }
+        }
+        ServerConfig::Stdio(stdio_config) => {
+            // Stdio 传输
+            tracing::info!("连接 MCP 服务器 [{}] (Stdio): {} {:?}", id, stdio_config.command, stdio_config.args);
+            match connect_stdio_server(&id, stdio_config, runtime).await {
+                Ok((service, tools)) => Ok(ActiveClient::Stdio { service, tools }),
+                Err(e) => Err(e),
+            }
+        }
+    };
 
     match result {
-        Ok((service, tools)) => {
+        Ok(active_client) => {
             // 保存客户端连接
             {
                 let mut clients = state.clients.write().await;
-                clients.insert(id.clone(), ActiveClient { service, tools });
+                clients.insert(id.clone(), active_client);
             }
             // 更新状态为活跃
             {
@@ -369,6 +503,71 @@ async fn connect_to_server_with_runtime(
             Err(error_msg)
         }
     }
+}
+
+/// 连接 SSE 服务器（使用传统 SSE 协议）
+async fn connect_sse_server(
+    id: &str,
+    config: &SSEServerConfig,
+) -> Result<(LegacySseClientWrapper, Vec<Tool>), anyhow::Error> {
+    let (client, tools) = sse_transport::connect_legacy_sse(id, &config.url, &config.headers).await?;
+    Ok((client, tools))
+}
+
+/// 连接 HTTP 服务器（Streamable HTTP）
+async fn connect_http_server(
+    id: &str,
+    config: &HTTPServerConfig,
+) -> Result<(LegacySseClientWrapper, Vec<Tool>), anyhow::Error> {
+    let (client, tools) = sse_transport::connect_http(id, &config.url, &config.headers).await?;
+    Ok((client, tools))
+}
+
+/// 连接 Stdio 服务器
+async fn connect_stdio_server(
+    _id: &str,
+    config: &StdioServerConfig,
+    runtime: &RuntimeConfig,
+) -> Result<(RunningService<RoleClient, ()>, Vec<Tool>), anyhow::Error> {
+    let command = find_executable(&config.command, runtime);
+    let args = config.args.clone();
+    let env = config.env.clone();
+    let runtime_clone = runtime.clone();
+    
+    let mut cmd = Command::new(&command);
+    
+    // 设置扩展的 PATH 环境变量
+    let extended_path = get_extended_path(&runtime_clone);
+    cmd.env("PATH", extended_path);
+    
+    // 设置 HOME 环境变量（某些工具需要）
+    if let Ok(home) = std::env::var("HOME") {
+        cmd.env("HOME", home);
+    }
+    
+    // 设置 USER 环境变量
+    if let Ok(user) = std::env::var("USER") {
+        cmd.env("USER", user);
+    }
+    
+    // 添加用户自定义环境变量
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+
+    let transport = TokioChildProcess::new(cmd.configure(|c| {
+        for arg in &args {
+            c.arg(arg);
+        }
+    }))
+    .map_err(|e| anyhow!("创建传输失败: {}", e))?;
+
+    let service = ().serve(transport).await.map_err(|e| anyhow!("连接服务器失败: {}", e))?;
+
+    // 获取工具列表
+    let tools_result = service.list_tools(Default::default()).await.map_err(|e| anyhow!("获取工具列表失败: {}", e))?;
+
+    Ok((service, tools_result.tools))
 }
 
 /// 连接到 MCP 服务器（使用默认运行时配置）
@@ -425,7 +624,7 @@ pub async fn mcp_add_server(
     save_config(&state).await?;
 
     // 如果状态是 active，则连接
-    if config.status == "active" {
+    if config.get_status() == "active" {
         let _ = connect_to_server(&state, id, config).await;
     }
 
@@ -478,7 +677,7 @@ pub async fn mcp_pause_server(
     {
         let mut cfg = state.config.write().await;
         if let Some(server) = cfg.mcp_servers.get_mut(&id) {
-            server.status = "paused".to_string();
+            server.set_status("paused".to_string());
         }
     }
     save_config(&state).await?;
@@ -508,7 +707,7 @@ pub async fn mcp_resume_server(
     let config = {
         let mut cfg = state.config.write().await;
         if let Some(server) = cfg.mcp_servers.get_mut(&id) {
-            server.status = "active".to_string();
+            server.set_status("active".to_string());
             Some(server.clone())
         } else {
             None
@@ -542,7 +741,7 @@ pub async fn mcp_get_tools(
     let clients = state.clients.read().await;
     if let Some(client) = clients.get(&id) {
         let tools: Vec<ToolInfo> = client
-            .tools
+            .tools()
             .iter()
             .map(|t| ToolInfo {
                 name: t.name.to_string(),
@@ -566,7 +765,7 @@ pub async fn mcp_get_all_tools(
 
     for (id, client) in clients.iter() {
         let tools: Vec<ToolInfo> = client
-            .tools
+            .tools()
             .iter()
             .map(|t| ToolInfo {
                 name: t.name.to_string(),
@@ -591,19 +790,38 @@ pub async fn mcp_call_tool(
     let clients = state.clients.read().await;
 
     if let Some(client) = clients.get(&id) {
-        let result = client
-            .service
-            .call_tool(CallToolRequestParam {
-                name: tool_name.into(),
-                arguments: arguments.as_ref().and_then(|v| v.as_object().cloned()),
-                task: None,
-            })
-            .await;
+        let args = arguments.as_ref().and_then(|v| v.as_object().cloned());
+        
+        let result = match client {
+            ActiveClient::Stdio { service, .. } => {
+                service
+                    .call_tool(CallToolRequestParam {
+                        name: tool_name.into(),
+                        arguments: args,
+                        task: None,
+                    })
+                    .await
+                    .map(|r| serde_json::to_value(&r).ok())
+                    .map_err(|e| e.to_string())
+            }
+            ActiveClient::Sse { client, .. } => {
+                client
+                    .call_tool(tool_name, args)
+                    .await
+                    .map(|r| serde_json::to_value(&r).ok())
+                    .map_err(|e| e.to_string())
+            }
+            ActiveClient::Http { client, .. } => {
+                client
+                    .call_tool(tool_name, args)
+                    .await
+                    .map(|r| serde_json::to_value(&r).ok())
+                    .map_err(|e| e.to_string())
+            }
+        };
 
         match result {
-            Ok(tool_result) => {
-                // 将结果转换为 JSON
-                let result_value = serde_json::to_value(&tool_result).ok();
+            Ok(result_value) => {
                 Ok(McpToolResponse {
                     result: result_value,
                     error: None,
@@ -611,7 +829,7 @@ pub async fn mcp_call_tool(
             }
             Err(e) => Ok(McpToolResponse {
                 result: None,
-                error: Some(e.to_string()),
+                error: Some(e),
             }),
         }
     } else {
@@ -637,7 +855,7 @@ pub async fn mcp_restart_all(state: State<'_, McpManager>) -> Result<McpConfigDa
     // 重新连接所有 active 服务器
     let config = state.config.read().await.clone();
     for (id, server_config) in &config.mcp_servers {
-        if server_config.status == "active" {
+        if server_config.get_status() == "active" {
             let _ = connect_to_server(&state, id.clone(), server_config.clone()).await;
         }
     }
@@ -676,7 +894,7 @@ pub async fn mcp_import_config(
 
     // 连接 active 服务器
     for (id, server_config) in &new_config.mcp_servers {
-        if server_config.status == "active" {
+        if server_config.get_status() == "active" {
             let _ = connect_to_server(&state, id.clone(), server_config.clone()).await;
         }
     }
@@ -712,15 +930,78 @@ pub async fn mcp_set_runtime(
     Ok(runtime)
 }
 
+/// 获取用户完整的 PATH 环境变量（通过交互式登录 shell）
+async fn get_user_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    
+    // 方法1: 直接 source 配置文件获取 PATH
+    let source_cmd = if shell.contains("zsh") {
+        format!(
+            "source ~/.zprofile 2>/dev/null; source ~/.zshrc 2>/dev/null; echo $PATH"
+        )
+    } else {
+        format!(
+            "source ~/.bash_profile 2>/dev/null; source ~/.bashrc 2>/dev/null; echo $PATH"
+        )
+    };
+    
+    let output = Command::new(&shell)
+        .args(["-c", &source_cmd])
+        .env("HOME", &home)
+        .output()
+        .await;
+    
+    if let Ok(output) = output {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() && path.contains(&home) {
+                tracing::info!("通过 source 获取到用户 PATH: {}", path);
+                return path;
+            }
+        }
+    }
+    
+    // 方法2: 使用 -i -l 模式
+    let output = Command::new(&shell)
+        .args(["-i", "-l", "-c", "echo $PATH"])
+        .env("HOME", &home)
+        .output()
+        .await;
+    
+    if let Ok(output) = output {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                tracing::info!("通过 -i -l 获取到用户 PATH: {}", path);
+                return path;
+            }
+        }
+    }
+    
+    // 回退：使用常见路径 + 系统 PATH
+    let system_path = std::env::var("PATH").unwrap_or_default();
+    
+    format!(
+        "/usr/local/bin:/opt/homebrew/bin:{}/.local/bin:{}/.nvm/versions/node/current/bin:{}/.cargo/bin:{}",
+        home, home, home, system_path
+    )
+}
+
 /// 自动检测可执行文件路径
 #[tauri::command]
 pub async fn mcp_detect_paths() -> Result<RuntimeConfig, String> {
     let mut detected = RuntimeConfig::default();
     
-    // 使用 which 命令检测可执行文件路径
-    async fn detect_command(cmd: &str) -> Option<String> {
+    // 先获取用户完整的 PATH
+    let user_path = get_user_path().await;
+    tracing::info!("使用 PATH 进行检测: {}", user_path);
+    
+    // 使用 which 命令检测可执行文件路径（带完整 PATH）
+    async fn detect_command(cmd: &str, path_env: &str) -> Option<String> {
         let output = Command::new("which")
             .arg(cmd)
+            .env("PATH", path_env)
             .output()
             .await
             .ok()?;
@@ -735,18 +1016,24 @@ pub async fn mcp_detect_paths() -> Result<RuntimeConfig, String> {
     }
     
     // 检测 npx
-    if let Some(path) = detect_command("npx").await {
+    if let Some(path) = detect_command("npx", &user_path).await {
         detected.npx_path = Some(path);
     }
     
     // 检测 node
-    if let Some(path) = detect_command("node").await {
+    if let Some(path) = detect_command("node", &user_path).await {
         detected.node_path = Some(path);
     }
     
     // 检测 uvx
-    if let Some(path) = detect_command("uvx").await {
+    if let Some(path) = detect_command("uvx", &user_path).await {
         detected.uvx_path = Some(path);
+    }
+    
+    // 同时把获取到的 PATH 作为 extra_path 返回，方便用户参考
+    if detected.npx_path.is_some() || detected.node_path.is_some() || detected.uvx_path.is_some() {
+        // 只有检测到东西时才设置 extra_path
+        detected.extra_path = Some(user_path);
     }
     
     Ok(detected)

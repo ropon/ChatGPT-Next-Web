@@ -38,7 +38,7 @@ tauri = { version = "1.5.4", features = [ "http-all",
 ] }
 tauri-plugin-window-state = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v1" }
 percent-encoding = "2.3.1"
-reqwest = "0.11.18"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 futures-util = "0.3.30"
 bytes = "1.7.2"
 
@@ -62,7 +62,7 @@ version = "0.4"
 # MCP SDK 及相关依赖
 [dependencies.rmcp]
 git = "https://github.com/modelcontextprotocol/rust-sdk"
-features = ["client", "transport-child-process"]
+features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"]
 
 [dependencies.anyhow]
 version = "1.0"
@@ -76,3 +76,13 @@ features = ["env-filter"]
 
 [dependencies.dirs]
 version = "5.0"
+
+[dependencies.uuid]
+version = "1"
+features = ["v4"]
+
+[dependencies.once_cell]
+version = "1.19"
+
+[dependencies.chrono]
+version = "0.4"

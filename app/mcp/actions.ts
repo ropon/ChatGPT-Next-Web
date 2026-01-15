@@ -228,3 +228,22 @@ export async function detectMcpPaths(): Promise<RuntimeConfig> {
   }
   return DEFAULT_RUNTIME_CONFIG;
 }
+
+/**
+ * 获取 MCP 日志 (仅 Tauri)
+ */
+export async function getMcpLogs(lines?: number): Promise<string[]> {
+  if (isTauri()) {
+    return tauriMcpApi.getLogs(lines);
+  }
+  return [];
+}
+
+/**
+ * 清空 MCP 日志 (仅 Tauri)
+ */
+export async function clearMcpLogs(): Promise<void> {
+  if (isTauri()) {
+    return tauriMcpApi.clearLogs();
+  }
+}

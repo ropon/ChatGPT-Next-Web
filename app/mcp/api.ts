@@ -289,6 +289,29 @@ export class TauriMcpApi implements McpApi {
       return DEFAULT_RUNTIME_CONFIG;
     }
   }
+
+  /**
+   * 获取 MCP 日志
+   */
+  async getLogs(lines?: number): Promise<string[]> {
+    try {
+      return await invoke<string[]>("mcp_get_logs", { lines });
+    } catch (e) {
+      console.error("[MCP] 获取日志失败", e);
+      return [];
+    }
+  }
+
+  /**
+   * 清空 MCP 日志
+   */
+  async clearLogs(): Promise<void> {
+    try {
+      await invoke("mcp_clear_logs");
+    } catch (e) {
+      console.error("[MCP] 清空日志失败", e);
+    }
+  }
 }
 
 // 导出单例实例，供 Tauri 应用使用

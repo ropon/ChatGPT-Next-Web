@@ -9,7 +9,7 @@
   },
   "package": {
     "productName": "NextChat",
-    "version": "2.17.1"
+    "version": "2.17.3"
   },
   "tauri": {
     "bundle": {
@@ -98,7 +98,7 @@
       "dangerousUseHttpScheme": true
     },
     "updater": {
-      "active": true,
+      "active": false,
       "endpoints": [
         "https://github.com/ChatGPTNextWeb/ChatGPT-Next-Web/releases/latest/download/latest.json"
       ],
@@ -106,7 +106,7 @@
       "windows": {
         "installMode": "passive"
       },
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERFNDE4MENFM0Y1RTZBOTQKUldTVWFsNC96b0JCM3RqM2NmMnlFTmxIaStRaEJrTHNOU2VqRVlIV1hwVURoWUdVdEc1eDcxVEYK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY3MDk0RTREMjFENjUzQkQKUldTOVU5WWhUVTRKWjlXUFIzaFppSENxaDNtdUpDWkc3Y1oyeTdpb0xlWDhscmRrYzlyZFR2WkkK"
     },
     "windows": [
       {

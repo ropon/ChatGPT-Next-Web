@@ -724,3 +724,55 @@
   border-radius: 8px;
   line-height: 1.5;
 }
+
+// 日志查看器样式
+.log-container {
+  width: 100%;
+  height: 400px;
+  min-height: 300px;
+  overflow-y: auto;
+  background-color: #1e1e1e;
+  border-radius: 8px;
+  padding: 12px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+
+// 全屏模式下的日志容器 - 使用 ui-lib 的类名
+:global(.modal-container-max) .log-container {
+  height: calc(95vh - 180px);
+  max-height: none;
+}
+
+.log-empty {
+  color: #666;
+  text-align: center;
+  padding: 40px;
+}
+
+.log-line {
+  color: #d4d4d4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 2px 0;
+  user-select: text;
+  cursor: text;
+  
+  &.log-error {
+    color: #f87171;
+  }
+  
+  &.log-warn {
+    color: #fbbf24;
+  }
+  
+  &.log-debug {
+    color: #60a5fa;
+  }
+  
+  &.log-info {
+    color: #4ade80;
+  }
+}

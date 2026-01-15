@@ -9,9 +9,10 @@ import RestartIcon from "../icons/reload.svg";
 import EyeIcon from "../icons/eye.svg";
 import GithubIcon from "../icons/github.svg";
 import SettingsIcon from "../icons/settings.svg";
+import LogIcon from "../icons/copy.svg";
 import { List, ListItem, Modal, showToast } from "./ui-lib";
 import { useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   addMcpServer,
   getClientsStatus,
@@ -25,6 +26,8 @@ import {
   removeMcpServer,
   restartAllClients,
   resumeMcpServer,
+  getMcpLogs,
+  clearMcpLogs,
 } from "../mcp/actions";
 import {
   ListToolsResponse,
@@ -34,6 +37,9 @@ import {
   ServerConfig,
   ServerStatusResponse,
   ToolInfo,
+  isSSEConfig,
+  isHTTPConfig,
+  isStdioConfig,
 } from "../mcp/types";
 import clsx from "clsx";
 import PlayIcon from "../icons/play.svg";
@@ -52,9 +58,14 @@ interface ConfigProperty {
 interface CustomServerForm {
   id: string;
   name: string;
+  type: "stdio" | "sse" | "http";
+  // stdio 类型字段
   command: string;
   args: string;
   env: string;
+  // sse/http 类型字段
+  url: string;
+  headers: string;
 }
 
 export function McpMarketPage() {
@@ -80,9 +91,12 @@ export function McpMarketPage() {
   const [customServerForm, setCustomServerForm] = useState<CustomServerForm>({
     id: "",
     name: "",
+    type: "stdio",
     command: "",
     args: "",
     env: "",
+    url: "",
+    headers: "",
   });
   const [editingCustomServerId, setEditingCustomServerId] = useState<
     string | undefined
@@ -91,6 +105,11 @@ export function McpMarketPage() {
   const [showRuntimeModal, setShowRuntimeModal] = useState(false);
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig>({});
   const [isDetectingPaths, setIsDetectingPaths] = useState(false);
+  // 日志查看相关状态
+  const [showLogModal, setShowLogModal] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [autoRefreshLogs, setAutoRefreshLogs] = useState(true);
+  const logContainerRef = useRef<HTMLDivElement>(null);
 
   // 检查 MCP 是否启用
   useEffect(() => {
@@ -158,6 +177,25 @@ export function McpMarketPage() {
     loadRuntimeConfig();
   }, [mcpEnabled]);
 
+  // 日志自动刷新
+  useEffect(() => {
+    if (!showLogModal || !autoRefreshLogs) return;
+
+    const refreshLogs = async () => {
+      const newLogs = await getMcpLogs(500);
+      setLogs(newLogs);
+      // 自动滚动到底部
+      if (logContainerRef.current) {
+        logContainerRef.current.scrollTop =
+          logContainerRef.current.scrollHeight;
+      }
+    };
+
+    refreshLogs();
+    const timer = setInterval(refreshLogs, 1000);
+    return () => clearInterval(timer);
+  }, [showLogModal, autoRefreshLogs]);
+
   // 加载初始状态
   useEffect(() => {
     const loadInitialState = async () => {
@@ -184,8 +222,8 @@ export function McpMarketPage() {
   useEffect(() => {
     if (!editingServerId || !config) return;
     const currentConfig = config.mcpServers[editingServerId];
-    if (currentConfig) {
-      // 从当前配置中提取用户配置
+    if (currentConfig && isStdioConfig(currentConfig)) {
+      // 从当前配置中提取用户配置（仅适用于 Stdio 类型）
       const preset = presetServers.find((s) => s.id === editingServerId);
       if (preset?.configSchema) {
         const userConfig: Record<string, any> = {};
@@ -395,24 +433,61 @@ export function McpMarketPage() {
     if (serverId && config?.mcpServers[serverId]) {
       // 编辑现有自定义服务器
       const serverConfig = config.mcpServers[serverId];
-      setCustomServerForm({
-        id: serverId,
-        name: serverId,
-        command: serverConfig.command,
-        args: serverConfig.args.join(" "),
-        env: Object.entries(serverConfig.env || {})
-          .map(([k, v]) => `${k}=${v}`)
-          .join("\n"),
-      });
+      if (isSSEConfig(serverConfig)) {
+        // SSE 类型服务器
+        setCustomServerForm({
+          id: serverId,
+          name: serverId,
+          type: "sse",
+          command: "",
+          args: "",
+          env: "",
+          url: serverConfig.url,
+          headers: Object.entries(serverConfig.headers || {})
+            .map(([k, v]) => `${k}=${v}`)
+            .join("\n"),
+        });
+      } else if (isHTTPConfig(serverConfig)) {
+        // HTTP 类型服务器
+        setCustomServerForm({
+          id: serverId,
+          name: serverId,
+          type: "http",
+          command: "",
+          args: "",
+          env: "",
+          url: serverConfig.url,
+          headers: Object.entries(serverConfig.headers || {})
+            .map(([k, v]) => `${k}=${v}`)
+            .join("\n"),
+        });
+      } else {
+        // Stdio 类型服务器
+        setCustomServerForm({
+          id: serverId,
+          name: serverId,
+          type: "stdio",
+          command: serverConfig.command,
+          args: serverConfig.args.join(" "),
+          env: Object.entries(serverConfig.env || {})
+            .map(([k, v]) => `${k}=${v}`)
+            .join("\n"),
+          url: "",
+          headers: "",
+        });
+      }
       setEditingCustomServerId(serverId);
     } else {
       // 添加新服务器
       setCustomServerForm({
         id: "",
         name: "",
+        type: "stdio",
         command: "",
         args: "",
         env: "",
+        url: "",
+        headers: "",
       });
       setEditingCustomServerId(undefined);
     }
@@ -421,14 +496,24 @@ export function McpMarketPage() {
 
   // 保存自定义服务器
   const saveCustomServer = async () => {
-    const { id, command, args, env } = customServerForm;
+    const { id, type, command, args, env, url, headers } = customServerForm;
 
     if (!id.trim()) {
       showToast(Locale.Mcp.Toast.EnterServerId);
       return;
     }
-    if (!command.trim()) {
+
+    // 根据类型验证必填字段
+    if (type === "stdio" && !command.trim()) {
       showToast(Locale.Mcp.Toast.EnterCommand);
+      return;
+    }
+    if (type === "sse" && !url.trim()) {
+      showToast(Locale.Mcp.Toast.EnterUrl || "Please enter URL");
+      return;
+    }
+    if (type === "http" && !url.trim()) {
+      showToast(Locale.Mcp.Toast.EnterUrl || "Please enter URL");
       return;
     }
 
@@ -444,33 +529,85 @@ export function McpMarketPage() {
     try {
       updateLoadingState(serverId, Locale.Mcp.Status.Saving);
 
-      // 解析参数
-      const argsArray = args
-        .trim()
-        .split(/\s+/)
-        .filter((a) => a.length > 0);
+      let serverConfig: ServerConfig;
 
-      // 解析环境变量
-      const envObj: Record<string, string> = {};
-      if (env.trim()) {
-        env
+      if (type === "sse") {
+        // SSE 类型配置
+        const headersObj: Record<string, string> = {};
+        if (headers.trim()) {
+          headers
+            .trim()
+            .split("\n")
+            .forEach((line) => {
+              const eqIndex = line.indexOf("=");
+              if (eqIndex > 0) {
+                const key = line.substring(0, eqIndex).trim();
+                const value = line.substring(eqIndex + 1).trim();
+                if (key) headersObj[key] = value;
+              }
+            });
+        }
+
+        serverConfig = {
+          type: "sse",
+          url: url.trim(),
+          ...(Object.keys(headersObj).length > 0
+            ? { headers: headersObj }
+            : {}),
+        };
+      } else if (type === "http") {
+        // HTTP 类型配置（Streamable HTTP）
+        const headersObj: Record<string, string> = {};
+        if (headers.trim()) {
+          headers
+            .trim()
+            .split("\n")
+            .forEach((line) => {
+              const eqIndex = line.indexOf("=");
+              if (eqIndex > 0) {
+                const key = line.substring(0, eqIndex).trim();
+                const value = line.substring(eqIndex + 1).trim();
+                if (key) headersObj[key] = value;
+              }
+            });
+        }
+
+        serverConfig = {
+          type: "http",
+          url: url.trim(),
+          ...(Object.keys(headersObj).length > 0
+            ? { headers: headersObj }
+            : {}),
+        };
+      } else {
+        // Stdio 类型配置
+        const argsArray = args
           .trim()
-          .split("\n")
-          .forEach((line) => {
-            const eqIndex = line.indexOf("=");
-            if (eqIndex > 0) {
-              const key = line.substring(0, eqIndex).trim();
-              const value = line.substring(eqIndex + 1).trim();
-              if (key) envObj[key] = value;
-            }
-          });
-      }
+          .split(/\s+/)
+          .filter((a) => a.length > 0);
 
-      const serverConfig: ServerConfig = {
-        command: command.trim(),
-        args: argsArray,
-        ...(Object.keys(envObj).length > 0 ? { env: envObj } : {}),
-      };
+        const envObj: Record<string, string> = {};
+        if (env.trim()) {
+          env
+            .trim()
+            .split("\n")
+            .forEach((line) => {
+              const eqIndex = line.indexOf("=");
+              if (eqIndex > 0) {
+                const key = line.substring(0, eqIndex).trim();
+                const value = line.substring(eqIndex + 1).trim();
+                if (key) envObj[key] = value;
+              }
+            });
+        }
+
+        serverConfig = {
+          type: "stdio",
+          command: command.trim(),
+          args: argsArray,
+          ...(Object.keys(envObj).length > 0 ? { env: envObj } : {}),
+        };
+      }
 
       const newConfig = await addMcpServer(serverId, serverConfig);
       setConfig(newConfig);
@@ -504,6 +641,17 @@ export function McpMarketPage() {
         id,
         ...serverConfig,
       }));
+  };
+
+  // 获取服务器显示信息
+  const getServerDisplayInfo = (serverConfig: ServerConfig) => {
+    if (isSSEConfig(serverConfig)) {
+      return `[SSE] ${serverConfig.url}`;
+    }
+    if (isHTTPConfig(serverConfig)) {
+      return `[HTTP] ${serverConfig.url}`;
+    }
+    return `${serverConfig.command} ${serverConfig.args.join(" ")}`;
   };
 
   // 保存运行时配置
@@ -892,6 +1040,14 @@ export function McpMarketPage() {
           <div className="window-actions">
             <div className="window-action-button">
               <IconButton
+                icon={<LogIcon />}
+                bordered
+                onClick={() => setShowLogModal(true)}
+                title="Logs"
+              />
+            </div>
+            <div className="window-action-button">
+              <IconButton
                 icon={<SettingsIcon />}
                 bordered
                 onClick={() => setShowRuntimeModal(true)}
@@ -984,9 +1140,9 @@ export function McpMarketPage() {
                               styles["mcp-market-info"],
                               "one-line",
                             )}
-                            title={`${server.command} ${server.args.join(" ")}`}
+                            title={getServerDisplayInfo(server)}
                           >
-                            {server.command} {server.args.join(" ")}
+                            {getServerDisplayInfo(server)}
                           </div>
                         </div>
                         <div className={styles["mcp-market-actions"]}>
@@ -1157,55 +1313,140 @@ export function McpMarketPage() {
                   />
                 </ListItem>
                 <ListItem
-                  title={Locale.Mcp.CustomServer.Command}
-                  subTitle={Locale.Mcp.CustomServer.CommandDesc}
+                  title={Locale.Mcp.CustomServer.Type || "Type"}
+                  subTitle={
+                    Locale.Mcp.CustomServer.TypeDesc || "Server connection type"
+                  }
                 >
-                  <input
-                    type="text"
-                    value={customServerForm.command}
-                    placeholder={Locale.Mcp.CustomServer.CommandPlaceholder}
+                  <select
+                    value={customServerForm.type}
                     onChange={(e) =>
                       setCustomServerForm({
                         ...customServerForm,
-                        command: e.target.value,
+                        type: e.target.value as "stdio" | "sse" | "http",
                       })
                     }
-                  />
+                  >
+                    <option value="stdio">Stdio</option>
+                    <option value="sse">SSE</option>
+                    <option value="http">HTTP</option>
+                  </select>
                 </ListItem>
-                <ListItem
-                  title={Locale.Mcp.CustomServer.Arguments}
-                  subTitle={Locale.Mcp.CustomServer.ArgumentsDesc}
-                >
-                  <input
-                    type="text"
-                    value={customServerForm.args}
-                    placeholder={Locale.Mcp.CustomServer.ArgumentsPlaceholder}
-                    onChange={(e) =>
-                      setCustomServerForm({
-                        ...customServerForm,
-                        args: e.target.value,
-                      })
-                    }
-                  />
-                </ListItem>
-                <ListItem
-                  title={Locale.Mcp.CustomServer.EnvVars}
-                  subTitle={Locale.Mcp.CustomServer.EnvVarsDesc}
-                  vertical
-                >
-                  <textarea
-                    className={styles["env-textarea"]}
-                    value={customServerForm.env}
-                    placeholder={Locale.Mcp.CustomServer.EnvVarsPlaceholder}
-                    rows={3}
-                    onChange={(e) =>
-                      setCustomServerForm({
-                        ...customServerForm,
-                        env: e.target.value,
-                      })
-                    }
-                  />
-                </ListItem>
+
+                {/* Stdio 类型字段 */}
+                {customServerForm.type === "stdio" && (
+                  <>
+                    <ListItem
+                      title={Locale.Mcp.CustomServer.Command}
+                      subTitle={Locale.Mcp.CustomServer.CommandDesc}
+                    >
+                      <input
+                        type="text"
+                        value={customServerForm.command}
+                        placeholder={Locale.Mcp.CustomServer.CommandPlaceholder}
+                        onChange={(e) =>
+                          setCustomServerForm({
+                            ...customServerForm,
+                            command: e.target.value,
+                          })
+                        }
+                      />
+                    </ListItem>
+                    <ListItem
+                      title={Locale.Mcp.CustomServer.Arguments}
+                      subTitle={Locale.Mcp.CustomServer.ArgumentsDesc}
+                    >
+                      <input
+                        type="text"
+                        value={customServerForm.args}
+                        placeholder={
+                          Locale.Mcp.CustomServer.ArgumentsPlaceholder
+                        }
+                        onChange={(e) =>
+                          setCustomServerForm({
+                            ...customServerForm,
+                            args: e.target.value,
+                          })
+                        }
+                      />
+                    </ListItem>
+                    <ListItem
+                      title={Locale.Mcp.CustomServer.EnvVars}
+                      subTitle={Locale.Mcp.CustomServer.EnvVarsDesc}
+                      vertical
+                    >
+                      <textarea
+                        className={styles["env-textarea"]}
+                        value={customServerForm.env}
+                        placeholder={Locale.Mcp.CustomServer.EnvVarsPlaceholder}
+                        rows={3}
+                        onChange={(e) =>
+                          setCustomServerForm({
+                            ...customServerForm,
+                            env: e.target.value,
+                          })
+                        }
+                      />
+                    </ListItem>
+                  </>
+                )}
+
+                {/* SSE/HTTP 类型字段 */}
+                {(customServerForm.type === "sse" ||
+                  customServerForm.type === "http") && (
+                  <>
+                    <ListItem
+                      title={Locale.Mcp.CustomServer.Url || "URL"}
+                      subTitle={
+                        customServerForm.type === "sse"
+                          ? Locale.Mcp.CustomServer.UrlDesc ||
+                            "SSE server endpoint URL"
+                          : "HTTP server endpoint URL (Streamable HTTP)"
+                      }
+                    >
+                      <input
+                        type="text"
+                        value={customServerForm.url}
+                        placeholder={
+                          customServerForm.type === "sse"
+                            ? Locale.Mcp.CustomServer.UrlPlaceholder ||
+                              "https://example.com/sse"
+                            : "https://example.com/mcp"
+                        }
+                        onChange={(e) =>
+                          setCustomServerForm({
+                            ...customServerForm,
+                            url: e.target.value,
+                          })
+                        }
+                      />
+                    </ListItem>
+                    <ListItem
+                      title={Locale.Mcp.CustomServer.Headers || "Headers"}
+                      subTitle={
+                        Locale.Mcp.CustomServer.HeadersDesc ||
+                        "HTTP headers (one per line, format: KEY=VALUE)"
+                      }
+                      vertical
+                    >
+                      <textarea
+                        className={styles["env-textarea"]}
+                        value={customServerForm.headers}
+                        placeholder={
+                          Locale.Mcp.CustomServer.HeadersPlaceholder ||
+                          "Authorization=Bearer xxx\nX-API-Key=your-key"
+                        }
+                        rows={3}
+                        onChange={(e) =>
+                          setCustomServerForm({
+                            ...customServerForm,
+                            headers: e.target.value,
+                          })
+                        }
+                      />
+                    </ListItem>
+                  </>
+                )}
               </List>
             </Modal>
           </div>
@@ -1312,6 +1553,74 @@ export function McpMarketPage() {
               </List>
               <div className={styles["runtime-hint"]}>
                 {Locale.Mcp.Runtime.Hint}
+              </div>
+            </Modal>
+          </div>
+        )}
+
+        {/* 日志查看弹窗 */}
+        {showLogModal && (
+          <div className="modal-mask">
+            <Modal
+              title="MCP Logs"
+              onClose={() => setShowLogModal(false)}
+              actions={[
+                <IconButton
+                  key="copy"
+                  text="Copy"
+                  onClick={() => {
+                    const logText = logs.join("\n");
+                    navigator.clipboard
+                      .writeText(logText)
+                      .then(() => {
+                        showToast("Logs copied to clipboard");
+                      })
+                      .catch(() => {
+                        showToast("Failed to copy logs");
+                      });
+                  }}
+                  bordered
+                />,
+                <IconButton
+                  key="auto-refresh"
+                  text={autoRefreshLogs ? "Pause" : "Resume"}
+                  onClick={() => setAutoRefreshLogs(!autoRefreshLogs)}
+                  bordered
+                />,
+                <IconButton
+                  key="clear"
+                  text="Clear"
+                  onClick={async () => {
+                    await clearMcpLogs();
+                    setLogs([]);
+                  }}
+                  bordered
+                />,
+                <IconButton
+                  key="close"
+                  text={Locale.Mcp.Actions.Close}
+                  onClick={() => setShowLogModal(false)}
+                  bordered
+                />,
+              ]}
+            >
+              <div ref={logContainerRef} className={styles["log-container"]}>
+                {logs.length === 0 ? (
+                  <div className={styles["log-empty"]}>No logs yet</div>
+                ) : (
+                  logs.map((log, index) => (
+                    <div
+                      key={index}
+                      className={clsx(styles["log-line"], {
+                        [styles["log-error"]]: log.includes("ERROR"),
+                        [styles["log-warn"]]: log.includes("WARN"),
+                        [styles["log-debug"]]: log.includes("DEBUG"),
+                      })}
+                    >
+                      {log}
+                    </div>
+                  ))
+                )}
               </div>
             </Modal>
           </div>

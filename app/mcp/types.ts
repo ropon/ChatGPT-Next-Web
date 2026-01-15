@@ -112,11 +112,49 @@ export interface ServerStatusResponse {
 }
 
 // MCP 服务器配置相关类型
-export interface ServerConfig {
+// Stdio 类型配置
+export interface StdioServerConfig {
+  type?: "stdio"; // 默认类型，可省略
   command: string;
   args: string[];
   env?: Record<string, string>;
   status?: "active" | "paused" | "error";
+}
+
+// SSE 类型配置
+export interface SSEServerConfig {
+  type: "sse";
+  url: string;
+  headers?: Record<string, string>;
+  status?: "active" | "paused" | "error";
+}
+
+// HTTP 类型配置（Streamable HTTP）
+export interface HTTPServerConfig {
+  type: "http";
+  url: string;
+  headers?: Record<string, string>;
+  status?: "active" | "paused" | "error";
+}
+
+export type ServerConfig =
+  | StdioServerConfig
+  | SSEServerConfig
+  | HTTPServerConfig;
+
+// 类型守卫
+export function isSSEConfig(config: ServerConfig): config is SSEServerConfig {
+  return config.type === "sse";
+}
+
+export function isHTTPConfig(config: ServerConfig): config is HTTPServerConfig {
+  return config.type === "http";
+}
+
+export function isStdioConfig(
+  config: ServerConfig,
+): config is StdioServerConfig {
+  return config.type === "stdio" || config.type === undefined;
 }
 
 export interface McpConfigData {

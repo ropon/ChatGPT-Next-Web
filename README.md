@@ -402,6 +402,59 @@ yarn install
 yarn dev
 ```
 
+### Desktop App Development & Build
+
+NextChat supports building desktop applications using Tauri. The desktop app includes native MCP (Model Context Protocol) support.
+
+#### Prerequisites
+
+- [Rust](https://www.rust-lang.org/tools/install) (latest stable)
+- Platform-specific dependencies:
+  - **macOS**: Xcode Command Line Tools
+  - **Windows**: Visual Studio Build Tools with C++ workload
+  - **Linux**: `sudo apt install libwebkit2gtk-4.0-dev build-essential curl wget libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev`
+
+#### Development
+
+```shell
+# Run desktop app in development mode
+yarn app:dev
+```
+
+#### Build Desktop App
+
+```shell
+# Build for current platform
+yarn app:build
+
+# Clean up if DMG build fails (macOS)
+yarn app:clean
+```
+
+> **Note**: Cross-platform compilation is not supported. You need to build on each target platform:
+> - Build `.dmg` on macOS
+> - Build `.msi`/`.exe` on Windows  
+> - Build `.deb`/`.AppImage` on Linux
+>
+> For automated cross-platform builds, use GitHub Actions (see `.github/workflows/`).
+
+#### Build Output
+
+After building, you can find the installers at:
+- **macOS**: `src-tauri/target/release/bundle/dmg/NextChat_x.x.x_x64.dmg`
+- **Windows**: `src-tauri/target/release/bundle/msi/NextChat_x.x.x_x64.msi`
+- **Linux**: `src-tauri/target/release/bundle/deb/` or `appimage/`
+
+#### Troubleshooting
+
+If DMG build fails on macOS with "error running bundle_dmg.sh":
+```shell
+# Clean up mounted volumes and temp files
+yarn app:clean
+# Then rebuild
+yarn app:build
+```
+
 ## Deployment
 
 ### Docker (Recommended)

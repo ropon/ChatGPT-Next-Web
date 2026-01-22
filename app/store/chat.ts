@@ -4,6 +4,13 @@ import {
   safeLocalStorage,
   trimTopic,
 } from "../utils";
+import {
+  detectImageGenerationIntent,
+  extractImageDescription,
+  optimizeImagePrompt,
+  supportsImageGeneration,
+  getImageGenerationType,
+} from "../utils/image-prompts";
 import { isMcpJson, extractMcpJson } from "../mcp/utils";
 
 import { indexedDBStorage } from "@/app/utils/indexedDB-storage";
@@ -410,6 +417,71 @@ export const useChatStore = createPersistStore(
       ) {
         const session = get().currentSession();
         const modelConfig = session.mask.modelConfig;
+
+        // Check if user wants to generate an image
+        const shouldGenerateImage = detectImageGenerationIntent(content);
+
+        // If user wants to generate image but not using a supported model, suggest switching
+        if (
+          shouldGenerateImage &&
+          !supportsImageGeneration(modelConfig.model)
+        ) {
+          // Determine the best image generation model to switch to
+          let targetModel = "dall-e-3"; // Default to DALL-E 3
+          let targetProvider = ServiceProvider.OpenAI;
+
+          // You could add logic here to choose different models based on user preference
+          // For example, prefer Grok for certain use cases:
+          // if (someCondition) {
+          //   targetModel = "grok-2-image-1212";
+          //   targetProvider = ServiceProvider.XAI;
+          // }
+
+          const updatedModelConfig = {
+            ...modelConfig,
+            model: targetModel,
+            providerName: targetProvider,
+          };
+
+          get().updateTargetSession(session, (session) => {
+            session.mask.modelConfig = updatedModelConfig;
+          });
+
+          // Extract and optimize the image prompt
+          const imageDescription = extractImageDescription(content);
+          const optimizedPrompt = optimizeImagePrompt(imageDescription);
+
+          content = optimizedPrompt;
+
+          // Add a system message to inform user about the switch
+          const systemMessage = createMessage({
+            role: "assistant",
+            content: `🎨 检测到您想要生成图片，已自动切换到 ${targetModel} 模型。\n\n优化后的提示词：${optimizedPrompt}\n\n正在为您生成图片...`,
+          });
+
+          get().updateTargetSession(session, (session) => {
+            session.messages = session.messages.concat([systemMessage]);
+          });
+        } else if (
+          shouldGenerateImage &&
+          supportsImageGeneration(modelConfig.model)
+        ) {
+          // If already using a supported model, just optimize the prompt
+          const imageDescription = extractImageDescription(content);
+          const optimizedPrompt = optimizeImagePrompt(imageDescription);
+          content = optimizedPrompt;
+
+          // Add a system message to show the optimized prompt
+          const generationType = getImageGenerationType(modelConfig.model);
+          const systemMessage = createMessage({
+            role: "assistant",
+            content: `🎨 使用 ${modelConfig.model} 模型生成图片。\n\n优化后的提示词：${optimizedPrompt}\n\n正在为您生成图片...`,
+          });
+
+          get().updateTargetSession(session, (session) => {
+            session.messages = session.messages.concat([systemMessage]);
+          });
+        }
 
         // MCP Response no need to fill template
         let mContent: string | MultimodalContent[] = isMcpResponse

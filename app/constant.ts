@@ -256,6 +256,7 @@ export const DeepSeek = {
 export const XAI = {
   ExampleEndpoint: XAI_BASE_URL,
   ChatPath: "v1/chat/completions",
+  ImagePath: "v1/images/generations",
 };
 
 export const ChatGLM = {
@@ -493,7 +494,7 @@ export const VISION_MODEL_REGEXES = [
   /o3/,
   /o4-mini/,
   /grok-4/i,
-  /gpt-5/
+  /gpt-5/,
 ];
 
 export const EXCLUDE_VISION_MODEL_REGEXES = [/claude-3-5-haiku-20241022/];
@@ -764,6 +765,7 @@ const xAIModes = [
   "grok-2-vision-1212",
   "grok-2-vision",
   "grok-2-vision-latest",
+  "grok-2-image-1212",
   "grok-3-mini-fast-beta",
   "grok-3-mini-fast",
   "grok-3-mini-fast-latest",

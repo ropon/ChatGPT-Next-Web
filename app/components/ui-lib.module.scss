@@ -337,3 +337,32 @@
   }
 }
 
+
+.category-button {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  background: var(--white);
+  border-radius: 16px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.category-button:hover {
+  background: var(--hover-color);
+}
+
+.category-button-active {
+  padding: 6px 12px;
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: white;
+  border-radius: 16px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.category-button-active:hover {
+  opacity: 0.9;
+}

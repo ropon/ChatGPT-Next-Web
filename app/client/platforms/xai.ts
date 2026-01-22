@@ -1,5 +1,5 @@
 "use client";
-// azure and openai, using same models. so using same LLMApi.
+// XAI API implementation with image generation support
 import { ApiPath, XAI_BASE_URL, XAI } from "@/app/constant";
 import {
   useAccessStore,
@@ -17,13 +17,28 @@ import {
   SpeechOptions,
 } from "../api";
 import { getClientConfig } from "@/app/config/client";
-import { getTimeoutMSByModel } from "@/app/utils";
-import { preProcessImageContent } from "@/app/utils/chat";
+import { getTimeoutMSByModel, getMessageTextContent } from "@/app/utils";
+import {
+  preProcessImageContent,
+  uploadImage,
+  base64Image2Blob,
+} from "@/app/utils/chat";
 import { RequestPayload } from "./openai";
 import { fetch } from "@/app/utils/stream";
 
+interface XAIImageRequestPayload {
+  model: string;
+  prompt: string;
+  n?: number;
+  response_format?: "url" | "b64_json";
+}
+
 export class XAIApi implements LLMApi {
   private disableListModels = true;
+
+  private isImageModel(model: string): boolean {
+    return model.toLowerCase().includes("image");
+  }
 
   path(path: string): string {
     const accessStore = useAccessStore.getState();
@@ -53,6 +68,38 @@ export class XAIApi implements LLMApi {
   }
 
   extractMessage(res: any) {
+    // Handle image generation response
+    if (res.data) {
+      let url = res.data?.at(0)?.url ?? "";
+      const b64_json = res.data?.at(0)?.b64_json ?? "";
+      if (!url && b64_json) {
+        // Convert base64 to blob and upload
+        return uploadImage(base64Image2Blob(b64_json, "image/jpeg")).then(
+          (uploadedUrl) => {
+            return [
+              {
+                type: "image_url",
+                image_url: {
+                  url: uploadedUrl,
+                },
+              },
+            ];
+          },
+        );
+      }
+      if (url) {
+        return [
+          {
+            type: "image_url",
+            image_url: {
+              url,
+            },
+          },
+        ];
+      }
+    }
+
+    // Handle chat response
     return res.choices?.at(0)?.message?.content ?? "";
   }
 
@@ -61,12 +108,6 @@ export class XAIApi implements LLMApi {
   }
 
   async chat(options: ChatOptions) {
-    const messages: ChatOptions["messages"] = [];
-    for (const v of options.messages) {
-      const content = await preProcessImageContent(v.content);
-      messages.push({ role: v.role, content });
-    }
-
     const modelConfig = {
       ...useAppConfig.getState().modelConfig,
       ...useChatStore.getState().currentSession().mask.modelConfig,
@@ -75,6 +116,91 @@ export class XAIApi implements LLMApi {
         providerName: options.config.providerName,
       },
     };
+
+    const isImageGeneration = this.isImageModel(modelConfig.model);
+
+    if (isImageGeneration) {
+      // Handle image generation
+      const lastMessage = options.messages[options.messages.length - 1];
+      const prompt = getMessageTextContent(lastMessage);
+
+      const requestPayload: XAIImageRequestPayload = {
+        model: modelConfig.model,
+        prompt,
+        n: 1,
+        response_format: "b64_json", // Use base64 for better handling
+      };
+
+      console.log("[Request] xai image payload: ", requestPayload);
+
+      const controller = new AbortController();
+      options.onController?.(controller);
+
+      try {
+        const imagePath = this.path(XAI.ImagePath);
+        const imagePayload = {
+          method: "POST",
+          body: JSON.stringify(requestPayload),
+          signal: controller.signal,
+          headers: getHeaders(),
+        };
+
+        const requestTimeoutId = setTimeout(
+          () => controller.abort(),
+          getTimeoutMSByModel(options.config.model),
+        );
+
+        const res = await fetch(imagePath, imagePayload);
+        clearTimeout(requestTimeoutId);
+
+        const resJson = await res.json();
+        console.log("[Response] xai image:", resJson);
+
+        if (resJson.error) {
+          options.onError?.(
+            new Error(resJson.error.message || "Image generation failed"),
+          );
+          return;
+        }
+
+        // Handle base64 image response
+        const b64_json = resJson.data?.at(0)?.b64_json;
+        if (b64_json) {
+          try {
+            const uploadedUrl = await uploadImage(
+              base64Image2Blob(b64_json, "image/jpeg"),
+            );
+            const message = [
+              {
+                type: "image_url",
+                image_url: {
+                  url: uploadedUrl,
+                },
+              },
+            ];
+            options.onFinish(message as any, res);
+          } catch (uploadError) {
+            console.error("Failed to upload image:", uploadError);
+            options.onError?.(new Error("Failed to process generated image"));
+          }
+        } else {
+          options.onError?.(new Error("No image data received"));
+        }
+
+        return;
+      } catch (e) {
+        console.log("[Request] failed to make image generation request", e);
+        options.onError?.(e as Error);
+        return;
+      }
+    }
+
+    // Handle regular chat
+    const messages: ChatOptions["messages"] = [];
+    for (const v of options.messages) {
+      const content = await preProcessImageContent(v.content);
+      messages.push({ role: v.role, content });
+    }
 
     const requestPayload: RequestPayload = {
       messages,

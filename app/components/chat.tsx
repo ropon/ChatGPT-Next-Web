@@ -116,6 +116,11 @@ import { MultimodalContent } from "../client/api";
 import { isEmpty } from "lodash-es";
 import { getModelProvider } from "../utils/model";
 import { RealtimeChat } from "@/app/components/realtime-chat";
+import {
+  supportsImageGeneration,
+  getImageGenerationType,
+} from "../utils/image-prompts";
+import { ImagePromptSelector } from "@/app/components/image-prompt-selector";
 import clsx from "clsx";
 import { getAvailableClientsCount, isMcpEnabled } from "../mcp/actions";
 
@@ -494,6 +499,9 @@ export function ChatActions(props: {
   setShowShortcutKeyModal: React.Dispatch<React.SetStateAction<boolean>>;
   setUserInput: (input: string) => void;
   setShowChatSidePanel: React.Dispatch<React.SetStateAction<boolean>>;
+  inputRef: RefObject<HTMLTextAreaElement>;
+  showImagePromptSelector: boolean;
+  setShowImagePromptSelector: React.Dispatch<React.SetStateAction<boolean>>;
 }) {
   const config = useAppConfig();
   const navigate = useNavigate();
@@ -639,6 +647,35 @@ export function ChatActions(props: {
           onClick={props.showPromptHints}
           text={Locale.Chat.InputActions.Prompt}
           icon={<PromptIcon />}
+        />
+
+        {/* 图片生成快捷按钮 */}
+        <ChatAction
+          onClick={() => {
+            // 检查当前模型是否支持图片生成
+            if (!supportsImageGeneration(currentModel)) {
+              // 自动切换到支持图片生成的模型
+              // 可以根据用户偏好或可用性选择不同的模型
+              let targetModel = "dall-e-3";
+              let targetProvider = ServiceProvider.OpenAI;
+
+              // 示例：可以根据条件选择不同的模型
+              // if (somePreference === "grok") {
+              //   targetModel = "grok-2-image-1212";
+              //   targetProvider = ServiceProvider.XAI;
+              // }
+
+              chatStore.updateTargetSession(session, (session) => {
+                session.mask.modelConfig.model = targetModel;
+                session.mask.modelConfig.providerName = targetProvider;
+              });
+              showToast(`已切换到 ${targetModel} 模型`);
+            }
+            // 显示图片提示词选择器
+            props.setShowImagePromptSelector(true);
+          }}
+          text={Locale.Chat.InputActions.GenerateImage}
+          icon={<ImageIcon />}
         />
 
         <ChatAction
@@ -834,6 +871,25 @@ export function ChatActions(props: {
           />
         )}
       </div>
+
+      {/* 图片提示词选择器 */}
+      {props.showImagePromptSelector && (
+        <ImagePromptSelector
+          onClose={() => props.setShowImagePromptSelector(false)}
+          onSelect={(prompt) => {
+            props.setUserInput(prompt);
+            // 聚焦到输入框
+            setTimeout(() => {
+              props.inputRef.current?.focus();
+              // 将光标移到末尾
+              const input = props.inputRef.current;
+              if (input) {
+                input.setSelectionRange(input.value.length, input.value.length);
+              }
+            }, 100);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1545,6 +1601,7 @@ function _Chat() {
 
   // 快捷键 shortcut keys
   const [showShortcutKeyModal, setShowShortcutKeyModal] = useState(false);
+  const [showImagePromptSelector, setShowImagePromptSelector] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1992,6 +2049,9 @@ function _Chat() {
                 setShowShortcutKeyModal={setShowShortcutKeyModal}
                 setUserInput={setUserInput}
                 setShowChatSidePanel={setShowChatSidePanel}
+                inputRef={inputRef}
+                showImagePromptSelector={showImagePromptSelector}
+                setShowImagePromptSelector={setShowImagePromptSelector}
               />
               <label
                 className={clsx(styles["chat-input-panel-inner"], {

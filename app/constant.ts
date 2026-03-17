@@ -177,6 +177,7 @@ export const Anthropic = {
 
 export const OpenaiPath = {
   ChatPath: "v1/chat/completions",
+  ResponsesPath: "v1/responses",
   SpeechPath: "v1/audio/speech",
   ImagePath: "v1/images/generations",
   UsagePath: "dashboard/billing/usage",
@@ -614,6 +615,7 @@ const openaiModels = [
   "gpt-5.2-pro-2025-12-11",
   "gpt-5.2-pro",
   "gpt-5.2-chat-latest",
+  "gpt-5.3-codex",
   "gpt-4o-mini-transcribe-2025-12-15",
   "gpt-4o-mini-transcribe-2025-03-20",
   "gpt-3.5-turbo-16k",
@@ -685,6 +687,8 @@ const anthropicModels = [
   "claude-sonnet-4-5-20250929",
   "claude-haiku-4-5-20251001",
   "claude-opus-4-5-20251101",
+  "claude-sonnet-4-6",
+  "claude-opus-4-6",
 ];
 
 const baiduModels = [
@@ -844,6 +848,10 @@ const ai302Models = [
   "gemini-2.5-flash",
   "claude-sonnet-4-20250514",
   "claude-opus-4-20250514",
+  "claude-sonnet-4-6",
+  "claude-opus-4-6",
+  "gpt-5.2-pro",
+  "gpt-5.3-codex",
   "gemini-2.5-pro",
 ];
 

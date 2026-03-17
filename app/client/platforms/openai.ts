@@ -44,6 +44,11 @@ import {
   getTimeoutMSByModel,
 } from "@/app/utils";
 import { fetch } from "@/app/utils/stream";
+import {
+  EventStreamContentType,
+  fetchEventSource,
+} from "@fortaine/fetch-event-source";
+import { prettyObject } from "@/app/utils/format";
 
 export interface OpenAIListModelResponse {
   object: string;
@@ -69,6 +74,27 @@ export interface RequestPayload {
   max_completion_tokens?: number;
 }
 
+interface ResponseInputItem {
+  role: "developer" | "system" | "user" | "assistant";
+  content: Array<
+    | {
+        type: "input_text";
+        text: string;
+      }
+    | {
+        type: "input_image";
+        image_url: string;
+      }
+  >;
+}
+
+interface ResponsesRequestPayload {
+  model: string;
+  input: ResponseInputItem[];
+  stream?: boolean;
+  max_output_tokens?: number;
+}
+
 export interface DalleRequestPayload {
   model: string;
   prompt: string;
@@ -81,6 +107,184 @@ export interface DalleRequestPayload {
 
 export class ChatGPTApi implements LLMApi {
   private disableListModels = true;
+  private readonly responsesOnlyModelPrefixes = [
+    "gpt-5-codex",
+    "gpt-5.1-codex",
+    "gpt-5.2-codex",
+    "gpt-5.3-codex",
+  ];
+  private readonly responsesOnlyModels = new Set(["gpt-5.2-pro"]);
+
+  private isResponsesOnlyModel(model: string) {
+    return (
+      this.responsesOnlyModels.has(model) ||
+      this.responsesOnlyModelPrefixes.some((prefix) => model.startsWith(prefix))
+    );
+  }
+
+  private toResponsesInputItem(message: any): ResponseInputItem {
+    const content = Array.isArray(message.content)
+      ? message.content
+          .map((item: any) => {
+            if (item.type === "text") {
+              return {
+                type: "input_text" as const,
+                text: item.text,
+              };
+            }
+            if (item.type === "image_url") {
+              const imageUrl = item.image_url?.url;
+              if (!imageUrl) return null;
+              return {
+                type: "input_image" as const,
+                image_url: imageUrl,
+              };
+            }
+            return null;
+          })
+          .filter(Boolean)
+      : [
+          {
+            type: "input_text" as const,
+            text: message.content ?? "",
+          },
+        ];
+
+    return {
+      role: message.role,
+      content:
+        content.length > 0
+          ? (content as ResponseInputItem["content"])
+          : [{ type: "input_text", text: "" }],
+    };
+  }
+
+  private extractResponsesDelta(msg: { data: string; event?: string }) {
+    if (!msg?.data || msg.data === "[DONE]") return "";
+    try {
+      const data = JSON.parse(msg.data) as {
+        type?: string;
+        delta?: string;
+        text?: string;
+      };
+      const eventType = data.type ?? msg.event ?? "";
+      if (
+        eventType === "response.output_text.delta" ||
+        eventType === "output_text.delta"
+      ) {
+        return data.delta ?? data.text ?? "";
+      }
+      return "";
+    } catch {
+      return "";
+    }
+  }
+
+  private streamResponsesApi(
+    chatPath: string,
+    requestPayload: ResponsesRequestPayload,
+    headers: Record<string, string>,
+    controller: AbortController,
+    options: ChatOptions,
+  ) {
+    let responseText = "";
+    let remainText = "";
+    let finished = false;
+    let responseRes: Response;
+
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      options.onFinish(responseText + remainText, responseRes);
+    };
+
+    const animateResponseText = () => {
+      if (finished || controller.signal.aborted) {
+        responseText += remainText;
+        if (responseText.length === 0) {
+          options.onError?.(new Error("empty response from server"));
+        }
+        return;
+      }
+
+      if (remainText.length > 0) {
+        const fetchCount = Math.max(1, Math.round(remainText.length / 60));
+        const fetchText = remainText.slice(0, fetchCount);
+        responseText += fetchText;
+        remainText = remainText.slice(fetchCount);
+        options.onUpdate?.(responseText, fetchText);
+      }
+
+      requestAnimationFrame(animateResponseText);
+    };
+
+    animateResponseText();
+    controller.signal.onabort = finish;
+
+    const requestTimeoutId = setTimeout(
+      () => controller.abort(),
+      getTimeoutMSByModel(options.config.model),
+    );
+
+    fetchEventSource(chatPath, {
+      fetch: fetch as any,
+      method: "POST",
+      body: JSON.stringify({ ...requestPayload, stream: true }),
+      signal: controller.signal,
+      headers,
+      async onopen(res) {
+        clearTimeout(requestTimeoutId);
+        responseRes = res;
+        const contentType = res.headers.get("content-type");
+
+        if (contentType?.startsWith("text/plain")) {
+          responseText = await res.clone().text();
+          return finish();
+        }
+
+        if (
+          !res.ok ||
+          !res.headers.get("content-type")?.startsWith(EventStreamContentType)
+        ) {
+          const responseTexts = [responseText];
+          let extraInfo = await res.clone().text();
+          try {
+            const resJson = await res.clone().json();
+            extraInfo = prettyObject(resJson);
+          } catch {}
+
+          if (res.status === 401) {
+            responseTexts.push(Locale.Error.Unauthorized);
+          }
+
+          if (extraInfo) {
+            responseTexts.push(extraInfo);
+          }
+
+          responseText = responseTexts.join("\n\n");
+          return finish();
+        }
+      },
+      onmessage: (msg) => {
+        if (finished) return;
+        if (msg.data === "[DONE]") {
+          return finish();
+        }
+        const delta = this.extractResponsesDelta(msg);
+        if (delta) {
+          remainText += delta;
+        }
+      },
+      onclose() {
+        finish();
+      },
+      onerror(e) {
+        options.onError?.(e as Error);
+        throw e;
+      },
+      openWhenHidden: true,
+    });
+  }
 
   path(path: string): string {
     const accessStore = useAccessStore.getState();
@@ -124,6 +328,23 @@ export class ChatGPTApi implements LLMApi {
   async extractMessage(res: any) {
     if (res.error) {
       return "```\n" + JSON.stringify(res, null, 4) + "\n```";
+    }
+    if (typeof res.output_text === "string" && res.output_text.length > 0) {
+      return res.output_text;
+    }
+    if (Array.isArray(res.output)) {
+      const texts = res.output
+        .flatMap((item: any) =>
+          Array.isArray(item?.content)
+            ? item.content
+                .filter((c: any) => c?.type === "output_text")
+                .map((c: any) => c?.text)
+            : [],
+        )
+        .filter(Boolean);
+      if (texts.length > 0) {
+        return texts.join("\n");
+      }
     }
     // dalle3 model return url, using url create image message
     if (res.data) {
@@ -193,14 +414,20 @@ export class ChatGPTApi implements LLMApi {
       },
     };
 
-    let requestPayload: RequestPayload | DalleRequestPayload;
+    let requestPayload:
+      | RequestPayload
+      | ResponsesRequestPayload
+      | DalleRequestPayload;
 
     const isDalle3 = _isDalle3(options.config.model);
     const isO1OrO3 =
       options.config.model.startsWith("o1") ||
       options.config.model.startsWith("o3") ||
       options.config.model.startsWith("o4-mini");
-    const isGpt5 =  options.config.model.startsWith("gpt-5");
+    const isGpt5 = options.config.model.startsWith("gpt-5");
+    const useResponsesApi =
+      modelConfig.providerName === ServiceProvider.OpenAI &&
+      this.isResponsesOnlyModel(modelConfig.model);
     if (isDalle3) {
       const prompt = getMessageTextContent(
         options.messages.slice(-1)?.pop() as any,
@@ -231,7 +458,7 @@ export class ChatGPTApi implements LLMApi {
         messages,
         stream: options.config.stream,
         model: modelConfig.model,
-        temperature: (!isO1OrO3 && !isGpt5) ? modelConfig.temperature : 1,
+        temperature: !isO1OrO3 && !isGpt5 ? modelConfig.temperature : 1,
         presence_penalty: !isO1OrO3 ? modelConfig.presence_penalty : 0,
         frequency_penalty: !isO1OrO3 ? modelConfig.frequency_penalty : 0,
         top_p: !isO1OrO3 ? modelConfig.top_p : 1,
@@ -240,11 +467,10 @@ export class ChatGPTApi implements LLMApi {
       };
 
       if (isGpt5) {
-  	// Remove max_tokens if present
-  	delete requestPayload.max_tokens;
-  	// Add max_completion_tokens (or max_completion_tokens if that's what you meant)
-  	requestPayload["max_completion_tokens"] = modelConfig.max_tokens;
-
+        // Remove max_tokens if present
+        delete requestPayload.max_tokens;
+        // Add max_completion_tokens (or max_completion_tokens if that's what you meant)
+        requestPayload["max_completion_tokens"] = modelConfig.max_tokens;
       } else if (isO1OrO3) {
         // by default the o1/o3 models will not attempt to produce output that includes markdown formatting
         // manually add "Formatting re-enabled" developer message to encourage markdown inclusion in model responses
@@ -258,11 +484,22 @@ export class ChatGPTApi implements LLMApi {
         requestPayload["max_completion_tokens"] = modelConfig.max_tokens;
       }
 
-
       // add max_tokens to vision model
-      if (visionModel && !isO1OrO3 && ! isGpt5) {
+      if (visionModel && !isO1OrO3 && !isGpt5) {
         requestPayload["max_tokens"] = Math.max(modelConfig.max_tokens, 4000);
       }
+    }
+
+    if (useResponsesApi && !isDalle3) {
+      const chatRequestPayload = requestPayload as RequestPayload;
+      requestPayload = {
+        model: modelConfig.model,
+        input: chatRequestPayload.messages.map((m) =>
+          this.toResponsesInputItem(m),
+        ),
+        stream: false,
+        max_output_tokens: modelConfig.max_tokens,
+      };
     }
 
     console.log("[Request] openai payload: ", requestPayload);
@@ -300,10 +537,22 @@ export class ChatGPTApi implements LLMApi {
         );
       } else {
         chatPath = this.path(
-          isDalle3 ? OpenaiPath.ImagePath : OpenaiPath.ChatPath,
+          isDalle3
+            ? OpenaiPath.ImagePath
+            : useResponsesApi
+            ? OpenaiPath.ResponsesPath
+            : OpenaiPath.ChatPath,
         );
       }
-      if (shouldStream) {
+      if (shouldStream && useResponsesApi) {
+        this.streamResponsesApi(
+          chatPath,
+          requestPayload as ResponsesRequestPayload,
+          getHeaders(),
+          controller,
+          options,
+        );
+      } else if (shouldStream) {
         let index = -1;
         const [tools, funcs] = usePluginStore
           .getState()

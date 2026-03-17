@@ -18,6 +18,7 @@ import React, {
   HTMLProps,
   MouseEvent,
   useEffect,
+  useMemo,
   useState,
   useCallback,
   useRef,
@@ -493,6 +494,17 @@ export function Selector<T>(props: {
       ? [props.defaultSelectedValue]
       : [],
   );
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredItems = useMemo(() => {
+    if (!searchQuery.trim()) return props.items;
+    const query = searchQuery.toLowerCase();
+    return props.items.filter(
+      (item) =>
+        item.title.toLowerCase().includes(query) ||
+        item.subTitle?.toLowerCase().includes(query),
+    );
+  }, [props.items, searchQuery]);
 
   const handleSelection = (e: MouseEvent, value: T) => {
     if (props.multiple) {
@@ -511,9 +523,22 @@ export function Selector<T>(props: {
 
   return (
     <div className={styles["selector"]} onClick={() => props.onClose?.()}>
-      <div className={styles["selector-content"]}>
+      <div
+        className={styles["selector-content"]}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className={styles["selector-search"]}>
+          <input
+            type="text"
+            placeholder={Locale.Settings.SearchModel || "Search models..."}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            autoFocus
+            className={styles["selector-search-input"]}
+          />
+        </div>
         <List>
-          {props.items.map((item, i) => {
+          {filteredItems.map((item, i) => {
             const selected = selectedValues.includes(item.value);
             return (
               <ListItem

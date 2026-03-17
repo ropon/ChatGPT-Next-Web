@@ -558,6 +558,7 @@ const en: LocaleType = {
     },
 
     Model: "Model",
+    SearchModel: "Search models...",
     CompressModel: {
       Title: "Summary Model",
       SubTitle: "Model used to compress history and generate title",

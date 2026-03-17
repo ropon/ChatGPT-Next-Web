@@ -315,9 +315,40 @@
   }
 
   &-content {
+    width: min(620px, calc(100vw - 24px));
     min-width: 300px;
+
+    .selector-search {
+      padding: 10px;
+      background-color: var(--white);
+      border-bottom: 1px solid var(--border-in-light);
+      border-radius: 10px 10px 0 0;
+
+      &-input {
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid var(--border-in-light);
+        border-radius: 8px;
+        font-size: 14px;
+        outline: none;
+        background-color: var(--white);
+        color: var(--black);
+        box-sizing: border-box;
+
+        &:focus {
+          border-color: var(--primary);
+        }
+
+        &::placeholder {
+          color: var(--black);
+          opacity: 0.3;
+        }
+      }
+    }
+
     .list {
       max-height: 90vh;
+      width: 100%;
       overflow-x: hidden;
       overflow-y: auto;
 
